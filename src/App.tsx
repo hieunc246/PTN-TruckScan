@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, MouseEvent } from 'react';
-import { Camera, MapPin, Clock, Truck, Ship, History, X, CheckCircle2, AlertCircle, Loader2, CameraIcon, RefreshCw, Printer, Box, QrCode, Flashlight, Upload, Eye, FileDown, Smartphone } from 'lucide-react';
+import { Camera, MapPin, Clock, Truck, Ship, History, X, CheckCircle2, AlertCircle, Loader2, CameraIcon, RefreshCw, Printer, Box, QrCode, Flashlight, Upload, Eye, FileDown, Smartphone, Cloud, Settings } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { motion, AnimatePresence } from 'motion/react';
@@ -58,7 +58,40 @@ export default function App() {
   const [focusPoint, setFocusPoint] = useState<{ x: number; y: number } | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [isEditing, setIsEditing] = useState(false);
+  const [isSavingToSheet, setIsSavingToSheet] = useState(false);
   const [editForm, setEditForm] = useState<CaptureRecord | null>(null);
+
+  const saveToGoogleSheet = async (record: CaptureRecord): Promise<boolean> => {
+    setIsSavingToSheet(true);
+    try {
+      const response = await fetch('/api/save-to-sheet', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(record),
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Lỗi khi lưu vào Google Sheets');
+      }
+      
+      const result = await response.json();
+      let successMsg = `Đã lưu dữ liệu vào Google Sheet thành công!\n\nFile: ${result.sheetTitle}\nVị trí: ${result.updatedRange || 'D-App'}`;
+      if (result.isDefault) {
+        successMsg += `\n\nLưu ý: Bạn đang sử dụng Sheet mặc định. Để dùng Sheet riêng, hãy cấu hình GOOGLE_SHEETS_ID trong Secrets.`;
+      }
+      alert(successMsg);
+      return true;
+    } catch (err: any) {
+      console.error('Sheet save error:', err);
+      alert(`Lỗi: ${err.message}. Vui lòng kiểm tra cấu hình GOOGLE_SERVICE_ACCOUNT_KEY.`);
+      return false;
+    } finally {
+      setIsSavingToSheet(false);
+    }
+  };
   const [locationName, setLocationName] = useState<string>("Đang xác định vị trí...");
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -184,13 +217,32 @@ export default function App() {
           } catch (err: any) {
             console.warn("High-quality camera failed, trying basic...", err);
             try {
-              // Fallback to basic video
+              // Fallback 1: Basic video with facingMode
               stream = await navigator.mediaDevices.getUserMedia({
                 video: { facingMode: facingMode },
                 audio: false,
               });
             } catch (fallbackErr: any) {
-              throw fallbackErr; // Re-throw to be caught by the outer catch
+              console.warn("Basic camera with facingMode failed, trying any camera...", fallbackErr);
+              try {
+                // Fallback 2: Any available camera (crucial for desktops/laptops)
+                stream = await navigator.mediaDevices.getUserMedia({
+                  video: true,
+                  audio: false,
+                });
+              } catch (finalErr: any) {
+                // Check if any video devices even exist
+                try {
+                  const devices = await navigator.mediaDevices.enumerateDevices();
+                  const hasVideo = devices.some(d => d.kind === 'videoinput');
+                  if (!hasVideo) {
+                    throw new Error("Không tìm thấy thiết bị camera nào được kết nối với hệ thống. Nếu bạn đang dùng máy tính bàn, hãy đảm bảo đã cắm webcam.");
+                  }
+                } catch (enumErr) {
+                  // If enumerateDevices fails, just throw the original error
+                }
+                throw finalErr; // Re-throw to be caught by the outer catch
+              }
             }
           }
           
@@ -202,12 +254,22 @@ export default function App() {
           console.error("Camera access error", err);
           if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
             setError("TRUY CẬP BỊ TỪ CHỐI: Vui lòng nhấn vào biểu tượng ổ khóa trên thanh địa chỉ trình duyệt, chọn 'Cho phép' Camera và tải lại trang.");
-          } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-            setError("KHÔNG TÌM THẤY CAMERA: Thiết bị của bạn dường như không có camera hoặc camera đã bị ngắt kết nối.");
-          } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
-            setError("CAMERA ĐANG BẬN: Một ứng dụng khác đang sử dụng camera. Vui lòng đóng các ứng dụng đó và thử lại.");
+          } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError' || err.message?.includes('Requested device not found')) {
+            setError("KHÔNG TÌM THẤY CAMERA: Thiết bị của bạn dường như không có camera hoặc camera đã bị ngắt kết nối. Nếu bạn đang dùng máy tính bàn, hãy đảm bảo đã cắm webcam.");
+          } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError' || err.message?.includes('could not start')) {
+            setError("CAMERA ĐANG BẬN: Một ứng dụng khác đang sử dụng camera (như Zoom, Teams, Zalo). Vui lòng đóng các ứng dụng đó và thử lại.");
+          } else if (err.name === 'OverconstrainedError') {
+            setError("LỖI CẤU HÌNH: Camera của bạn không hỗ trợ độ phân giải yêu cầu. Đang thử lại với cấu hình thấp hơn...");
+            // This case is already partially handled by fallbacks, but we can try one last time with absolute minimums
+            try {
+              stream = await navigator.mediaDevices.getUserMedia({ video: true });
+              if (videoRef.current) videoRef.current.srcObject = stream;
+              return;
+            } catch (e) {
+              setError("KHÔNG THỂ KHỞI TẠO CAMERA: " + (e as Error).message);
+            }
           } else {
-            setError("LỖI CAMERA: " + (err.message || "Không xác định") + ". Vui lòng thử tải lại trang.");
+            setError("LỖI CAMERA: " + (err.message || "Không xác định") + ". Vui lòng thử tải lại trang hoặc kiểm tra quyền truy cập camera.");
           }
           setIsCameraActive(false);
         }
@@ -417,6 +479,24 @@ export default function App() {
     }
   };
 
+  // --- Debug Config ---
+  const [debugInfo, setDebugInfo] = useState<any>(null);
+  const [isDebugLoading, setIsDebugLoading] = useState(false);
+
+  const checkConfig = async () => {
+    setIsDebugLoading(true);
+    try {
+      const res = await fetch('/api/check-config');
+      const data = await res.json();
+      setDebugInfo(data);
+    } catch (e) {
+      console.error("Failed to check config", e);
+      setError("Không thể kiểm tra cấu hình hệ thống.");
+    } finally {
+      setIsDebugLoading(false);
+    }
+  };
+
   const handleFileUpload = (e: import('react').ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -512,7 +592,7 @@ export default function App() {
     startCamera();
   };
 
-  const handleOpenPrint = () => {
+  const handleOpenPrint = async () => {
     const volume = parseFloat(volumeInput);
     if (!idNumberInput || idNumberInput === '---') {
       setError("Vui lòng nhập biển số / số hiệu");
@@ -524,6 +604,14 @@ export default function App() {
       window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
+
+    if (currentResult) {
+      const success = await saveToGoogleSheet(currentResult);
+      if (!success) {
+        return; // Stop if saving to sheet fails
+      }
+    }
+    
     setShowPrintView(true);
   };
 
@@ -572,7 +660,7 @@ export default function App() {
             <title>In Phiếu Cân - ${idNumberInput}</title>
             <style>
               body { margin: 0; display: flex; justify-content: center; align-items: flex-start; background: white; }
-              img { width: 100%; max-width: ${isThermalMode ? '88mm' : '148mm'}; height: auto; }
+              img { width: 100%; max-width: ${isThermalMode ? '80mm' : '148mm'}; height: auto; }
               @page { margin: 0; size: auto; }
               @media print {
                 body { margin: 0; }
@@ -753,6 +841,13 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <button 
+            onClick={checkConfig}
+            className="p-2.5 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 rounded-full transition-all"
+            title="Kiểm tra cấu hình"
+          >
+            <Settings className="w-5 h-5" />
+          </button>
           {searchQuery && (
             <button 
               onClick={() => {
@@ -776,17 +871,26 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
               <div className="w-20 h-20 bg-zinc-800 rounded-full flex items-center justify-center text-zinc-500">
                 <CameraIcon className="w-10 h-10" />
               </div>
-              <div className="space-y-2">
-                <h3 className="text-white font-bold">Camera chưa sẵn sàng</h3>
-                <p className="text-zinc-400 text-sm">Vui lòng cấp quyền truy cập camera để bắt đầu chụp ảnh phương tiện.</p>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <h3 className="text-white font-bold">Camera chưa sẵn sàng</h3>
+                  <p className="text-zinc-400 text-sm">Vui lòng cấp quyền truy cập camera để bắt đầu chụp ảnh phương tiện.</p>
+                </div>
+                <div className="flex flex-col gap-3">
+                  <button 
+                    onClick={() => setIsCameraActive(true)}
+                    className="w-full px-6 py-3 bg-emerald-600 text-white font-bold rounded-2xl hover:bg-emerald-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/20"
+                  >
+                    <CameraIcon className="w-5 h-5" />
+                    Kích hoạt Camera
+                  </button>
+                  <label className="w-full cursor-pointer px-6 py-3 bg-zinc-800 text-zinc-300 font-bold rounded-2xl hover:bg-zinc-700 transition-all flex items-center justify-center gap-2 border border-zinc-700">
+                    <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
+                    <Upload className="w-5 h-5" />
+                    Tải ảnh từ máy
+                  </label>
+                </div>
               </div>
-              <button 
-                onClick={() => setIsCameraActive(true)}
-                className="px-6 py-3 bg-emerald-600 text-white font-bold rounded-2xl hover:bg-emerald-700 transition-all flex items-center gap-2 shadow-lg shadow-emerald-900/20"
-              >
-                <CameraIcon className="w-5 h-5" />
-                Kích hoạt Camera
-              </button>
             </div>
           )}
 
@@ -1013,9 +1117,15 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
                 <div className="text-sm">
                   <p className="font-black uppercase tracking-wider mb-1">Cảnh báo hệ thống</p>
                   <p className="font-medium leading-relaxed">{error}</p>
+                  <p className="mt-2 text-[11px] opacity-70 italic">Mẹo: Nếu camera không hoạt động, bạn có thể chọn "Tải ảnh từ máy" để tiếp tục công việc.</p>
                 </div>
               </div>
-              <div className="flex gap-2 self-end">
+              <div className="flex flex-wrap gap-2 justify-end">
+                <label className="cursor-pointer px-4 py-2.5 bg-emerald-600 text-white text-xs font-black uppercase tracking-widest rounded-xl hover:bg-emerald-700 transition-all flex items-center gap-2 shadow-lg">
+                  <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
+                  <Upload className="w-3.5 h-3.5" />
+                  Tải ảnh từ máy
+                </label>
                 <button 
                   onClick={() => window.location.reload()}
                   className="px-4 py-2.5 bg-zinc-900 text-white text-xs font-black uppercase tracking-widest rounded-xl hover:bg-black transition-all flex items-center gap-2 shadow-lg"
@@ -1028,7 +1138,7 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
                     setError(null);
                     setIsCameraActive(true);
                   }}
-                  className="px-4 py-2.5 bg-red-600 text-white text-xs font-black uppercase tracking-widest rounded-xl hover:bg-red-700 transition-all flex items-center gap-2 shadow-lg"
+                  className="px-4 py-2.5 bg-zinc-200 text-zinc-700 text-xs font-black uppercase tracking-widest rounded-xl hover:bg-zinc-300 transition-all flex items-center gap-2 shadow-lg"
                 >
                   Thử lại
                 </button>
@@ -1183,23 +1293,28 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={handleOpenPrint}
-                className="flex-1 relative overflow-hidden py-2.5 bg-gradient-to-r from-emerald-500 via-emerald-400 to-emerald-600 text-white rounded-xl font-black uppercase tracking-widest text-[10px] flex items-center justify-center gap-2 shadow-[0_5px_15px_rgba(16,185,129,0.2)]"
+                disabled={isSavingToSheet}
+                className={`flex-[2] relative overflow-hidden py-2.5 ${isSavingToSheet ? 'bg-zinc-400' : 'bg-gradient-to-r from-emerald-500 via-emerald-400 to-emerald-600'} text-white rounded-xl font-black uppercase tracking-widest text-[10px] flex items-center justify-center gap-2 shadow-[0_5px_15px_rgba(16,185,129,0.2)]`}
               >
                 <div className="absolute inset-0 bg-gradient-to-b from-white/30 to-transparent pointer-events-none" />
-                <motion.div
-                  animate={{ 
-                    scale: [1, 1.2, 1],
-                    opacity: [1, 0.8, 1]
-                  }}
-                  transition={{ 
-                    duration: 2,
-                    repeat: Infinity,
-                    ease: "easeInOut"
-                  }}
-                >
-                  <Eye className="w-3.5 h-3.5" />
-                </motion.div>
-                Lưu và xem trước
+                {isSavingToSheet ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <motion.div
+                    animate={{ 
+                      scale: [1, 1.2, 1],
+                      opacity: [1, 0.8, 1]
+                    }}
+                    transition={{ 
+                      duration: 2,
+                      repeat: Infinity,
+                      ease: "easeInOut"
+                    }}
+                  >
+                    <Eye className="w-3.5 h-3.5" />
+                  </motion.div>
+                )}
+                {isSavingToSheet ? 'Đang lưu Sheet...' : 'Lưu và xem trước'}
               </motion.button>
               <motion.button 
                 whileHover={{ scale: 1.02 }}
@@ -1211,6 +1326,65 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
                 <CameraIcon className="w-3.5 h-3.5" />
                 Chụp lại
               </motion.button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Debug Info Overlay */}
+        <AnimatePresence>
+          {debugInfo && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-md flex items-center justify-center p-6"
+              onClick={() => setDebugInfo(null)}
+            >
+              <motion.div 
+                initial={{ scale: 0.9, y: 20 }}
+                animate={{ scale: 1, y: 0 }}
+                className="bg-white w-full max-w-md rounded-[2.5rem] p-8 shadow-2xl space-y-6"
+                onClick={e => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xl font-black uppercase tracking-tight italic">Kiểm tra cấu hình</h3>
+                  <button onClick={() => setDebugInfo(null)} className="p-2 hover:bg-zinc-100 rounded-full transition-colors">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+                    <span className="text-sm font-bold text-zinc-500">Gemini API Key</span>
+                    {debugInfo.geminiKey ? <CheckCircle2 className="w-5 h-5 text-emerald-500" /> : <AlertCircle className="w-5 h-5 text-red-500" />}
+                  </div>
+
+                  <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-bold text-zinc-500">Google Service Account</span>
+                      {debugInfo.serviceAccountKey.validJson ? <CheckCircle2 className="w-5 h-5 text-emerald-500" /> : <AlertCircle className="w-5 h-5 text-red-500" />}
+                    </div>
+                    {debugInfo.serviceAccountKey.isUrl && (
+                      <p className="text-[10px] text-red-500 font-medium">LỖI: Bạn đã dán một URL thay vì nội dung file JSON. Vui lòng copy nội dung file .json đã tải về.</p>
+                    )}
+                    {debugInfo.serviceAccountKey.error && !debugInfo.serviceAccountKey.isUrl && (
+                      <p className="text-[10px] text-red-500 font-medium">LỖI: {debugInfo.serviceAccountKey.error}</p>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-between p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+                    <span className="text-sm font-bold text-zinc-500">Google Sheet ID</span>
+                    <span className="text-[10px] font-mono bg-zinc-200 px-2 py-1 rounded-lg truncate max-w-[150px]">{debugInfo.sheetsId.value}</span>
+                  </div>
+                </div>
+
+                <button 
+                  onClick={() => setDebugInfo(null)}
+                  className="w-full py-4 bg-zinc-900 text-white font-black uppercase tracking-widest rounded-2xl hover:bg-black transition-all"
+                >
+                  Đóng
+                </button>
+              </motion.div>
             </motion.div>
           )}
         </AnimatePresence>
@@ -1238,24 +1412,43 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
                 </div>
               </div>
               
-              {/* Search Bar */}
-              <div className="relative group">
-                <div className="absolute inset-y-0 left-5 flex items-center pointer-events-none">
-                  <Truck className="w-4 h-4 text-zinc-400 group-focus-within:text-emerald-500 transition-colors" />
+              <div className="flex gap-3">
+                {/* Search Bar */}
+                <div className="relative group flex-1">
+                  <div className="absolute inset-y-0 left-5 flex items-center pointer-events-none">
+                    <Truck className="w-4 h-4 text-zinc-400 group-focus-within:text-emerald-500 transition-colors" />
+                  </div>
+                  <input 
+                    type="text"
+                    placeholder="Tìm biển số xe / số hiệu tàu..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full bg-white border-2 border-zinc-100 rounded-2xl py-4 pl-12 pr-5 text-sm font-bold focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 transition-all outline-none shadow-sm placeholder:text-zinc-300"
+                  />
+                  {searchQuery && (
+                    <button 
+                      onClick={() => setSearchQuery("")}
+                      className="absolute inset-y-0 right-5 flex items-center text-zinc-400 hover:text-zinc-600"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
-                <input 
-                  type="text"
-                  placeholder="Tìm biển số xe / số hiệu tàu..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-white border-2 border-zinc-100 rounded-2xl py-4 pl-12 pr-5 text-sm font-bold focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 transition-all outline-none shadow-sm placeholder:text-zinc-300"
-                />
-                {searchQuery && (
+
+                {filteredHistory.length > 0 && (
                   <button 
-                    onClick={() => setSearchQuery("")}
-                    className="absolute inset-y-0 right-5 flex items-center text-zinc-400 hover:text-zinc-600"
+                    onClick={async () => {
+                      if (confirm(`Bạn có muốn lưu tất cả ${filteredHistory.length} bản ghi vào Google Sheet không?`)) {
+                        for (const record of filteredHistory) {
+                          await saveToGoogleSheet(record);
+                        }
+                      }
+                    }}
+                    className="px-4 bg-blue-50 text-blue-600 rounded-2xl border-2 border-blue-100 hover:bg-blue-100 transition-all flex items-center gap-2 shadow-sm"
+                    title="Lưu tất cả vào Sheet"
                   >
-                    <X className="w-4 h-4" />
+                    <Cloud className="w-4 h-4" />
+                    <span className="text-[10px] font-black uppercase tracking-widest hidden sm:inline">Lưu tất cả</span>
                   </button>
                 )}
               </div>
@@ -1291,22 +1484,30 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
                           </h4>
                           <p className="text-[9px] font-bold text-zinc-400 uppercase tracking-tighter">#{record.id.slice(-8)}</p>
                         </div>
-                        {searchQuery && (
-                          <div className="flex items-center gap-2">
-                            <button 
-                              onClick={(e) => handleEditRecord(record, e)}
-                              className="p-1.5 text-zinc-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors"
-                            >
-                              <RefreshCw className="w-3.5 h-3.5" />
-                            </button>
-                            <button 
-                              onClick={(e) => handleDeleteRecord(record.id, e)}
-                              className="p-1.5 text-zinc-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                            >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        )}
+                        <div className="flex items-center gap-1">
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              saveToGoogleSheet(record);
+                            }}
+                            title="Lưu vào Google Sheet"
+                            className="p-1.5 text-blue-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                          >
+                            <Cloud className="w-3.5 h-3.5" />
+                          </button>
+                          <button 
+                            onClick={(e) => handleEditRecord(record, e)}
+                            className="p-1.5 text-zinc-400 hover:text-emerald-500 hover:bg-emerald-50 rounded-lg transition-colors"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5" />
+                          </button>
+                          <button 
+                            onClick={(e) => handleDeleteRecord(record.id, e)}
+                            className="p-1.5 text-zinc-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
                       <div className="marquee-container">
                         <p className="text-xs text-zinc-500 font-medium animate-marquee-bounce inline-block">
@@ -1459,7 +1660,7 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
                 className="w-full flex flex-col items-center py-10 px-4 print:py-0 print:px-0"
               >
                 {/* Delivery Note Content */}
-                <div id="printable-ticket" className={`bg-white shadow-[0_30px_100px_rgba(0,0,0,0.2)] print:shadow-none transition-all duration-500 ${isThermalMode ? 'w-[88mm] min-h-[120mm] p-6' : 'w-[148mm] min-h-[210mm] p-10'} text-black relative overflow-hidden rounded-[2rem] print:rounded-none`}>
+                <div id="printable-ticket" className={`bg-white shadow-[0_30px_100px_rgba(0,0,0,0.2)] print:shadow-none transition-all duration-500 ${isThermalMode ? 'w-[80mm] min-h-[120mm] p-6' : 'w-[148mm] min-h-[210mm] p-10'} text-black relative overflow-hidden rounded-[2rem] print:rounded-none`}>
                   {/* Decorative Elements for A5 mode */}
                   {!isThermalMode && (
                     <>
@@ -1519,7 +1720,7 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
                               </div>
                             </div>
 
-                            {/* QR Code for 88mm mode */}
+                            {/* QR Code for 80mm mode */}
                             <div className="flex flex-col items-center gap-1 shrink-0">
                               <div className="p-1 bg-white border-2 border-zinc-900 rounded-lg">
                                 <QRCodeSVG value={getQrData(currentResult!)} size={82} level="H" />
@@ -1660,7 +1861,7 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
                     onClick={() => setIsThermalMode(!isThermalMode)}
                     className={`h-10 sm:h-12 px-3 sm:px-5 rounded-xl sm:rounded-2xl text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all border-2 ${isThermalMode ? 'bg-emerald-500 border-emerald-400 text-white shadow-lg shadow-emerald-500/20' : 'bg-zinc-50 border-zinc-200 text-zinc-500 hover:bg-zinc-100'}`}
                   >
-                    {isThermalMode ? 'Khổ 88mm' : 'Khổ A5'}
+                    {isThermalMode ? 'Khổ 80mm' : 'Khổ A5'}
                   </button>
                   <button 
                     onClick={handlePrint}

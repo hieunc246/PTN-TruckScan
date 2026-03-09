@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@keyframes marquee {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-100%); }
+}
+
+@keyframes marquee-bounce {
+  0%, 100% { transform: translateX(0); }
+  50% { transform: translateX(-50%); }
+}
+
+.animate-marquee-bounce {
+  display: inline-block;
+  white-space: nowrap;
+  animation: marquee-bounce 8s ease-in-out infinite;
+}
+
+.animate-marquee {
+  display: inline-block;
+  white-space: nowrap;
+  animation: marquee 15s linear infinite;
+}
+
+.marquee-container {
+  overflow: hidden;
+  white-space: nowrap;
+  width: 100%;
+}
+
+/* Fix for html2canvas oklch error */
+#printable-ticket, #printable-ticket * {
+  --tw-text-opacity: 1 !important;
+  --tw-bg-opacity: 1 !important;
+  --tw-border-opacity: 1 !important;
+}
+
+#printable-ticket .text-zinc-900 { color: #18181b !important; }
+#printable-ticket .text-zinc-800 { color: #27272a !important; }
+#printable-ticket .text-zinc-700 { color: #3f3f46 !important; }
+#printable-ticket .text-zinc-600 { color: #52525b !important; }
+#printable-ticket .text-zinc-500 { color: #71717a !important; }
+#printable-ticket .text-zinc-400 { color: #a1a1aa !important; }
+#printable-ticket .text-zinc-300 { color: #d4d4d8 !important; }
+
+#printable-ticket .bg-zinc-900 { background-color: #18181b !important; }
+#printable-ticket .bg-zinc-100 { background-color: #f4f4f5 !important; }
+#printable-ticket .bg-zinc-50 { background-color: #fafafa !important; }
+
+#printable-ticket .border-zinc-900 { border-color: #18181b !important; }
+#printable-ticket .border-zinc-200 { border-color: #e4e4e7 !important; }
+#printable-ticket .border-zinc-100 { border-color: #f4f4f5 !important; }
+
+#printable-ticket .text-emerald-600 { color: #059669 !important; }
+#printable-ticket .bg-emerald-50 { background-color: #ecfdf5 !important; }
+#printable-ticket .border-emerald-100 { border-color: #d1fae5 !important; }
+
+#printable-ticket .text-blue-600 { color: #2563eb !important; }
+#printable-ticket .bg-blue-50 { background-color: #eff6ff !important; }
+#printable-ticket .border-blue-100 { border-color: #dbeafe !important; }

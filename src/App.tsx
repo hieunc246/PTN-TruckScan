@@ -1,0 +1,1699 @@
+import { useState, useRef, useEffect, useCallback, MouseEvent } from 'react';
+import { Camera, MapPin, Clock, Truck, Ship, History, X, CheckCircle2, AlertCircle, Loader2, CameraIcon, RefreshCw, Printer, Box, QrCode, Flashlight, Upload, Eye, FileDown, Smartphone } from 'lucide-react';
+import html2canvas from 'html2canvas';
+import { jsPDF } from 'jspdf';
+import { motion, AnimatePresence } from 'motion/react';
+import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
+import { QRCodeSVG } from 'qrcode.react';
+
+// --- Types ---
+
+interface CaptureRecord {
+  id: string;
+  imageUrl: string;
+  vehicleType: 'truck' | 'ship' | 'unknown';
+  idNumber: string;
+  timestamp: string;
+  location: {
+    lat: number;
+    lng: number;
+    address: string;
+  };
+  confidence: number;
+  volume?: string;
+  productType?: 'Cát' | 'Đất';
+}
+
+interface GeminiResult {
+  vehicleType: 'truck' | 'ship' | 'unknown';
+  locationName: string;
+  confidence: number;
+}
+
+// --- Constants ---
+
+const STORAGE_KEY = 'logitrack_history';
+const COMPANY_INFO = {
+  name: "Công Ty TNHH TM-DV-XD Phương Thảo Nguyên",
+  taxId: "0303122455",
+  address: "192/18 Nguyễn Thái Bình, P. Bảy Hiền, TP. Hồ Chí Minh"
+};
+
+export default function App() {
+  const [isCameraActive, setIsCameraActive] = useState(false);
+  const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [showQrContent, setShowQrContent] = useState(false);
+  const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [history, setHistory] = useState<CaptureRecord[]>([]);
+  const [currentResult, setCurrentResult] = useState<CaptureRecord | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [idNumberInput, setIdNumberInput] = useState("");
+  const [volumeInput, setVolumeInput] = useState("");
+  const [productType, setProductType] = useState<'Cát' | 'Đất'>('Cát');
+  const [showPrintView, setShowPrintView] = useState(false);
+  const [isFlashOn, setIsFlashOn] = useState(false);
+  const [isThermalMode, setIsThermalMode] = useState(true);
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const [focusPoint, setFocusPoint] = useState<{ x: number; y: number } | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isEditing, setIsEditing] = useState(false);
+  const [editForm, setEditForm] = useState<CaptureRecord | null>(null);
+  const [locationName, setLocationName] = useState<string>("Đang xác định vị trí...");
+
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  const [facingMode, setFacingMode] = useState<'user' | 'environment'>('environment');
+
+  const [lastLocationCall, setLastLocationCall] = useState<{ lat: number; lng: number; time: number } | null>(null);
+
+  // --- Geolocation ---
+  const fetchLocation = useCallback(() => {
+    if (!navigator.geolocation) {
+      setError("Trình duyệt không hỗ trợ định vị.");
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        try {
+          const lat = position.coords.latitude;
+          const lng = position.coords.longitude;
+          setLocation({ lat, lng });
+          
+          // Optimization: Only call Gemini if moved significantly or 5 mins passed
+          const now = Date.now();
+          if (lastLocationCall) {
+            const dist = Math.sqrt(Math.pow(lat - lastLocationCall.lat, 2) + Math.pow(lng - lastLocationCall.lng, 2));
+            if (dist < 0.001 && (now - lastLocationCall.time) < 300000) {
+              return; // Skip API call
+            }
+          }
+
+          if (process.env.GEMINI_API_KEY) {
+            try {
+              const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+              const response = await ai.models.generateContent({
+                model: "gemini-3-flash-preview",
+                contents: `Loc: ${lat}, ${lng}. Shortest VN name (e.g. Cảng Cát Lái). Text only.`,
+              });
+              setLocationName(response.text || "Vị trí hiện tại");
+              setLastLocationCall({ lat, lng, time: now });
+            } catch (e: any) {
+              console.error("Reverse geocode error", e);
+              if (e.message?.includes('429')) {
+                // Silently fail to coordinates if rate limited
+                setLocationName(`${lat.toFixed(4)}, ${lng.toFixed(4)}`);
+              } else {
+                setLocationName(`${lat.toFixed(4)}, ${lng.toFixed(4)}`);
+              }
+            }
+          } else {
+            setLocationName(`${lat.toFixed(4)}, ${lng.toFixed(4)}`);
+          }
+        } catch (err) {
+          console.error("Geolocation success callback error", err);
+        }
+      },
+      (err) => {
+        console.error("Location error", err);
+        setError("Không thể lấy vị trí. Vui lòng bật GPS.");
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+  }, [lastLocationCall]);
+
+  // --- Clock for Overlay ---
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // --- Initialization ---
+  useEffect(() => {
+    try {
+      const savedHistory = localStorage.getItem(STORAGE_KEY);
+      if (savedHistory) {
+        setHistory(JSON.parse(savedHistory));
+      }
+    } catch (e) {
+      console.error("Failed to load history", e);
+      localStorage.removeItem(STORAGE_KEY);
+    }
+    // Auto-start camera
+    setIsCameraActive(true);
+  }, []);
+
+  // --- Error Auto-clear ---
+  useEffect(() => {
+    if (error) {
+      const timer = setTimeout(() => setError(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [error]);
+
+  useEffect(() => {
+    let stream: MediaStream | null = null;
+    
+    if (isCameraActive && !capturedImage && !isProcessing) {
+      const initCamera = async () => {
+        try {
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            setError("Trình duyệt của bạn không hỗ trợ truy cập camera hoặc đang chạy trong môi trường không an toàn (HTTP).");
+            setIsCameraActive(false);
+            return;
+          }
+
+          // Stop any existing tracks before starting new ones
+          if (videoRef.current && videoRef.current.srcObject) {
+            const oldStream = videoRef.current.srcObject as MediaStream;
+            oldStream.getTracks().forEach(track => track.stop());
+          }
+
+          try {
+            // Try with high quality first
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: { 
+                facingMode: facingMode,
+                width: { ideal: 1920 },
+                height: { ideal: 1080 }
+              },
+              audio: false,
+            });
+          } catch (err: any) {
+            console.warn("High-quality camera failed, trying basic...", err);
+            try {
+              // Fallback to basic video
+              stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: facingMode },
+                audio: false,
+              });
+            } catch (fallbackErr: any) {
+              throw fallbackErr; // Re-throw to be caught by the outer catch
+            }
+          }
+          
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+          }
+          fetchLocation();
+        } catch (err: any) {
+          console.error("Camera access error", err);
+          if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+            setError("TRUY CẬP BỊ TỪ CHỐI: Vui lòng nhấn vào biểu tượng ổ khóa trên thanh địa chỉ trình duyệt, chọn 'Cho phép' Camera và tải lại trang.");
+          } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+            setError("KHÔNG TÌM THẤY CAMERA: Thiết bị của bạn dường như không có camera hoặc camera đã bị ngắt kết nối.");
+          } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+            setError("CAMERA ĐANG BẬN: Một ứng dụng khác đang sử dụng camera. Vui lòng đóng các ứng dụng đó và thử lại.");
+          } else {
+            setError("LỖI CAMERA: " + (err.message || "Không xác định") + ". Vui lòng thử tải lại trang.");
+          }
+          setIsCameraActive(false);
+        }
+      };
+      initCamera();
+    }
+
+    return () => {
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [isCameraActive, facingMode, capturedImage, isProcessing]);
+
+  useEffect(() => {
+    if (history.length > 0) {
+      try {
+        // Limit history to 20 items to prevent LocalStorage QuotaExceededError
+        const limitedHistory = history.slice(0, 20);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(limitedHistory));
+      } catch (e) {
+        console.error("Failed to save history", e);
+        // If quota exceeded, try saving even fewer items
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(history.slice(0, 5)));
+        } catch (e2) {
+          // If still failing, don't crash the app
+        }
+      }
+    }
+  }, [history]);
+
+  // --- Camera Logic ---
+
+  const startCamera = async () => {
+    setIsCameraActive(true);
+    setError(null);
+    setVolumeInput("");
+    setProductType("Cát");
+    setCapturedImage(null);
+    setCurrentResult(null);
+  };
+
+  const toggleCamera = () => {
+    setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
+  };
+
+  const toggleFlash = async () => {
+    if (videoRef.current && videoRef.current.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      const track = stream.getVideoTracks()[0];
+      try {
+        const capabilities = track.getCapabilities() as any;
+        if (capabilities.torch) {
+          await track.applyConstraints({
+            advanced: [{ torch: !isFlashOn }]
+          } as any);
+        }
+        setIsFlashOn(!isFlashOn);
+      } catch (e) {
+        console.error("Flash error", e);
+        setIsFlashOn(!isFlashOn);
+      }
+    } else {
+      setIsFlashOn(!isFlashOn);
+    }
+  };
+
+  const stopCamera = () => {
+    if (videoRef.current && videoRef.current.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      stream.getTracks().forEach(track => track.stop());
+      videoRef.current.srcObject = null;
+    }
+    setIsCameraActive(false);
+  };
+
+  const capturePhoto = () => {
+    if (videoRef.current && canvasRef.current) {
+      const video = videoRef.current;
+      if (video.videoWidth === 0 || video.videoHeight === 0) return;
+
+      const canvas = canvasRef.current;
+      
+      // Resize to a reasonable max dimension (1024px) to save memory and storage
+      const maxDim = 1024;
+      let width = video.videoWidth;
+      let height = video.videoHeight;
+      
+      if (width > maxDim || height > maxDim) {
+        if (width > height) {
+          height = (maxDim / width) * height;
+          width = maxDim;
+        } else {
+          width = (maxDim / height) * width;
+          height = maxDim;
+        }
+      }
+
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(video, 0, 0, width, height);
+        // Use higher quality (0.8) to improve resolution
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+        
+        stopCamera();
+        setCapturedImage(dataUrl);
+        processImage(dataUrl);
+      }
+    }
+  };
+
+  // --- AI Processing ---
+
+  const generateTicketId = () => {
+    const now = new Date();
+    const yymmdd = now.getFullYear().toString().slice(-2) + 
+                   (now.getMonth() + 1).toString().padStart(2, '0') + 
+                   now.getDate().toString().padStart(2, '0');
+    const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const randomLetter = letters[Math.floor(Math.random() * letters.length)];
+    const randomDigits = Math.floor(1000 + Math.random() * 9000).toString();
+    return `${yymmdd}${randomLetter}${randomDigits}`;
+  };
+
+  const processImage = async (base64Image: string) => {
+    setIsProcessing(true);
+    setError(null);
+
+    const callAI = async (retryCount = 0): Promise<GeminiResult> => {
+      try {
+        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+        // Optimized prompt: No image sent, only coordinates for location name
+        const prompt = `Reverse geocode: ${location?.lat}, ${location?.lng}. 
+        JSON: {"locationName": "string"}`;
+
+        const response = await ai.models.generateContent({
+          model: "gemini-3-flash-preview",
+          contents: [{ parts: [{ text: prompt }] }],
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                locationName: { type: Type.STRING },
+              },
+              required: ['locationName'],
+            },
+          },
+        });
+
+        const text = response.text || '{}';
+        const data = JSON.parse(text.replace(/```json/g, '').replace(/```/g, '').trim());
+        return {
+          vehicleType: 'truck',
+          locationName: data.locationName || locationName || "Vị trí không xác định",
+          confidence: 1.0
+        };
+      } catch (err: any) {
+        if (err.message?.includes('429') && retryCount < 2) {
+          await new Promise(r => setTimeout(r, 2000 * (retryCount + 1)));
+          return callAI(retryCount + 1);
+        }
+        throw err;
+      }
+    };
+
+    try {
+      if (!process.env.GEMINI_API_KEY) {
+        throw new Error("Thiếu cấu hình API Key.");
+      }
+
+      const resultData = await callAI();
+
+      const newRecord: CaptureRecord = {
+        id: generateTicketId(),
+        imageUrl: base64Image,
+        vehicleType: resultData.vehicleType && resultData.vehicleType !== 'unknown' ? resultData.vehicleType : 'truck',
+        idNumber: '---',
+        timestamp: new Date().toISOString(),
+        location: {
+          lat: location?.lat || 0,
+          lng: location?.lng || 0,
+          address: resultData.locationName || locationName || "Vị trí không xác định",
+        },
+        confidence: resultData.confidence || 0,
+        productType: productType,
+        volume: volumeInput,
+      };
+
+      setCurrentResult(newRecord);
+      setHistory(prev => [newRecord, ...prev]);
+      // Clear temporary image to free memory since it's now in currentResult/history
+      setCapturedImage(null);
+    } catch (err: any) {
+      console.error("AI Processing error", err);
+      if (err.message?.includes('429')) {
+        setError("Hệ thống đang quá tải (429). Vui lòng đợi 1 phút và thử lại.");
+      } else {
+        setError("Lỗi xử lý hình ảnh hoặc kết nối AI. Vui lòng thử lại.");
+      }
+    } finally {
+      setIsProcessing(false);
+      if (isCameraActive) stopCamera();
+    }
+  };
+
+  const handleFileUpload = (e: import('react').ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const dataUrl = event.target?.result as string;
+        
+        // Resize uploaded image before processing
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const maxDim = 1024;
+          let width = img.width;
+          let height = img.height;
+          
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = (maxDim / width) * height;
+              width = maxDim;
+            } else {
+              width = (maxDim / height) * width;
+              height = maxDim;
+            }
+          }
+          
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            const resizedDataUrl = canvas.toDataURL('image/jpeg', 0.8);
+            setCapturedImage(resizedDataUrl);
+            processImage(resizedDataUrl);
+          }
+        };
+        img.src = dataUrl;
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleUpdateIdNumber = (val: string) => {
+    setIdNumberInput(val);
+    if (currentResult) {
+      setCurrentResult({ ...currentResult, idNumber: val });
+      setHistory(prev => prev.map(r => r.id === currentResult.id ? { ...r, idNumber: val } : r));
+    }
+  };
+
+  const handleUpdateVolume = (val: string) => {
+    setVolumeInput(val);
+    if (currentResult) {
+      const updated = { ...currentResult, volume: val };
+      setCurrentResult(updated);
+      setHistory(prev => prev.map(h => h.id === currentResult.id ? updated : h));
+    }
+  };
+
+  const handleUpdateProductType = (val: 'Cát' | 'Đất') => {
+    setProductType(val);
+    if (currentResult) {
+      const updated = { ...currentResult, productType: val };
+      setCurrentResult(updated);
+      setHistory(prev => prev.map(h => h.id === currentResult.id ? updated : h));
+    }
+  };
+
+  const handleUpdateVehicleType = (val: 'truck' | 'ship') => {
+    if (currentResult) {
+      const updated = { ...currentResult, vehicleType: val };
+      setCurrentResult(updated);
+      setHistory(prev => prev.map(h => h.id === currentResult.id ? updated : h));
+    }
+  };
+
+  const handleVideoClick = (e: MouseEvent<HTMLVideoElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    setFocusPoint({ x, y });
+    
+    // Hide focus point after 1.5s
+    setTimeout(() => setFocusPoint(null), 1500);
+  };
+
+  const resetCapture = () => {
+    setCapturedImage(null);
+    setCurrentResult(null);
+    setError(null);
+    setVolumeInput("");
+    setIdNumberInput("");
+    setShowQrContent(false);
+    startCamera();
+  };
+
+  const handleOpenPrint = () => {
+    const volume = parseFloat(volumeInput);
+    if (!idNumberInput || idNumberInput === '---') {
+      setError("Vui lòng nhập biển số / số hiệu");
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+    if (!volumeInput || isNaN(volume) || volume <= 0) {
+      setError("Vui lòng nhập khối lượng");
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+    setShowPrintView(true);
+  };
+
+  const handlePrint = async () => {
+    const printElement = document.getElementById('printable-ticket');
+    if (!printElement) return;
+
+    const toast = document.createElement('div');
+    toast.className = 'fixed top-4 left-1/2 -translate-x-1/2 z-[200] bg-zinc-900 text-white px-6 py-4 rounded-2xl shadow-2xl text-sm font-bold flex items-center gap-3 border border-white/10';
+    toast.innerHTML = '<div class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> Đang chuẩn bị bản in...';
+    document.body.appendChild(toast);
+
+    try {
+      // Small delay to ensure styles are applied
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Create a high-quality image of the ticket
+      const canvas = await html2canvas(printElement, {
+        scale: 3,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+        windowWidth: printElement.scrollWidth,
+        windowHeight: printElement.scrollHeight,
+        onclone: (clonedDoc) => {
+          const ticket = clonedDoc.getElementById('printable-ticket');
+          if (ticket) {
+            ticket.style.fontFamily = 'sans-serif';
+          }
+        }
+      });
+      
+      const imgData = canvas.toDataURL('image/png');
+      
+      // Create a new window for printing
+      const printWindow = window.open('', '_blank');
+      if (!printWindow) {
+        toast.innerHTML = '⚠️ Trình duyệt đã chặn cửa sổ bật lên. Vui lòng cho phép bật lên để in.';
+        setTimeout(() => toast.remove(), 5000);
+        return;
+      }
+
+      printWindow.document.write(`
+        <html>
+          <head>
+            <title>In Phiếu Cân - ${idNumberInput}</title>
+            <style>
+              body { margin: 0; display: flex; justify-content: center; align-items: flex-start; background: white; }
+              img { width: 100%; max-width: ${isThermalMode ? '88mm' : '148mm'}; height: auto; }
+              @page { margin: 0; size: auto; }
+              @media print {
+                body { margin: 0; }
+                img { width: 100%; }
+              }
+            </style>
+          </head>
+          <body>
+            <img src="${imgData}" onload="window.print(); window.onafterprint = function() { window.close(); };" />
+            <script>
+              // Fallback for mobile browsers that don't support onafterprint
+              setTimeout(function() {
+                // We don't close automatically on mobile to let user see the print dialog
+              }, 2000);
+            </script>
+          </body>
+        </html>
+      `);
+      printWindow.document.close();
+      
+      toast.remove();
+    } catch (err) {
+      console.error('Print Error:', err);
+      toast.innerHTML = '❌ Lỗi khi chuẩn bị bản in. Thử lại hoặc dùng "Tải PDF".';
+      setTimeout(() => toast.remove(), 3000);
+      
+      // Fallback to standard print
+      window.print();
+    }
+  };
+
+  const handleDownloadPDF = async () => {
+    const printElement = document.getElementById('printable-ticket');
+    if (!printElement) return;
+
+    const toast = document.createElement('div');
+    toast.className = 'fixed top-4 left-1/2 -translate-x-1/2 z-[200] bg-zinc-900 text-white px-6 py-4 rounded-2xl shadow-2xl text-sm font-bold flex items-center gap-3 border border-white/10';
+    toast.innerHTML = '<div class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> Đang tạo file PDF...';
+    document.body.appendChild(toast);
+
+    try {
+      // Small delay to ensure styles are applied
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      const canvas = await html2canvas(printElement, {
+        scale: 3,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+        windowWidth: printElement.scrollWidth,
+        windowHeight: printElement.scrollHeight,
+        onclone: (clonedDoc) => {
+          const ticket = clonedDoc.getElementById('printable-ticket');
+          if (ticket) {
+            ticket.style.fontFamily = 'sans-serif';
+          }
+        }
+      });
+      
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF({
+        orientation: 'p',
+        unit: 'mm',
+        format: isThermalMode ? [88, (canvas.height * 88) / canvas.width] : 'a5'
+      });
+
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+
+      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight, undefined, 'FAST');
+      pdf.save(`Phieu_Can_${idNumberInput}_${new Date().getTime()}.pdf`);
+      
+      toast.innerHTML = '✅ Đã tải xuống file PDF!';
+      setTimeout(() => toast.remove(), 2000);
+    } catch (err) {
+      console.error('PDF Error:', err);
+      toast.innerHTML = '❌ Lỗi khi tạo PDF. Vui lòng thử lại.';
+      setTimeout(() => toast.remove(), 3000);
+    }
+  };
+
+  // --- QR Data Generation ---
+  const sanitizeValue = (val: string | undefined | null) => {
+    if (!val || val.toLowerCase() === 'unknown' || val.toLowerCase() === 'none' || val === '___' || val === 'N/A' || val === '---') {
+      return 'Chưa xác định';
+    }
+    return val;
+  };
+
+  const RenderSanitized = ({ value, className = "" }: { value: string | undefined | null, className?: string }) => {
+    const sanitized = sanitizeValue(value);
+    if (sanitized === 'Chưa xác định') {
+      return <span className="text-[9px] font-bold text-zinc-400 uppercase tracking-wider">{sanitized}</span>;
+    }
+    return <span className={className}>{sanitized}</span>;
+  };
+
+  const getQrData = (record: CaptureRecord) => {
+    let timeStr = "---";
+    try {
+      timeStr = new Intl.DateTimeFormat('vi-VN', { 
+        dateStyle: 'medium', 
+        timeStyle: 'short' 
+      }).format(new Date(record.timestamp));
+    } catch (e) {
+      console.error("Date format error", e);
+    }
+    
+    const vehicleTypeText = record.vehicleType === 'truck' ? 'Xe tải' : record.vehicleType === 'ship' ? 'Tàu thủy' : 'Chưa xác định';
+    
+    return `THÔNG TIN PHIẾU XUẤT KHO
+Sản phẩm: ${sanitizeValue(record.productType)}
+Phương tiện: ${sanitizeValue(record.idNumber)}
+Loại: ${vehicleTypeText}
+Số m³: ${record.volume || '0'} m³
+Thời gian: ${timeStr}
+Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
+  };
+
+  const clearAllHistory = () => {
+    if (confirm("Bạn có chắc chắn muốn xóa tất cả dữ liệu lịch sử? Hành động này không thể hoàn tác.")) {
+      setHistory([]);
+      localStorage.removeItem(STORAGE_KEY);
+      setCurrentResult(null);
+      setCapturedImage(null);
+      setIsCameraActive(true);
+    }
+  };
+
+  const handleDeleteRecord = (id: string, e: MouseEvent) => {
+    e.stopPropagation();
+    if (confirm("Bạn có chắc chắn muốn xóa bản ghi này?")) {
+      setHistory(prev => prev.filter(r => r.id !== id));
+    }
+  };
+
+  const handleEditRecord = (record: CaptureRecord, e: MouseEvent) => {
+    e.stopPropagation();
+    setEditForm({ ...record });
+    setIsEditing(true);
+  };
+
+  const saveEdit = () => {
+    if (editForm) {
+      setHistory(prev => prev.map(r => r.id === editForm.id ? editForm : r));
+      setIsEditing(false);
+      setEditForm(null);
+    }
+  };
+
+  const isToday = (dateStr: string) => {
+    const date = new Date(dateStr);
+    const today = new Date();
+    return date.getDate() === today.getDate() &&
+      date.getMonth() === today.getMonth() &&
+      date.getFullYear() === today.getFullYear();
+  };
+
+  const filteredHistory = history.filter(record => {
+    const matchesSearch = record.idNumber.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                         record.id.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchesSearch && isToday(record.timestamp);
+  });
+
+  // --- UI Components ---
+
+  return (
+    <div className="min-h-screen bg-zinc-50 text-zinc-900 font-sans selection:bg-emerald-500/30 print:bg-white print:text-black">
+      {/* Header - Hidden on Print */}
+      <header className="fixed top-0 left-0 right-0 z-50 bg-white/80 backdrop-blur-xl border-b border-zinc-200 px-6 py-4 flex items-center justify-between print:hidden">
+        <div className="flex items-center gap-3">
+          <div className="bg-emerald-500 p-2 rounded-xl shadow-lg shadow-emerald-500/20">
+            <Truck className="w-5 h-5 text-white" />
+          </div>
+          <div>
+            <h1 className="font-black text-xl tracking-tighter uppercase italic text-zinc-900">LogiTrack AI</h1>
+            <p className="text-[10px] font-bold text-emerald-600 tracking-widest uppercase opacity-80">Logistics Thông Minh</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {searchQuery && (
+            <button 
+              onClick={() => {
+                setCapturedImage(null);
+                setCurrentResult(null);
+                setIsCameraActive(true);
+              }}
+              className="p-2.5 bg-emerald-500 text-white rounded-full transition-all active:scale-95 shadow-lg shadow-emerald-500/20"
+            >
+              <Camera className="w-5 h-5" />
+            </button>
+          )}
+        </div>
+      </header>
+
+      <main className="pt-24 pb-32 max-w-lg mx-auto px-4 space-y-8 print:hidden">
+        {/* Camera / Preview Section */}
+        <section className="relative aspect-[3/4] bg-zinc-900 rounded-[2.5rem] overflow-hidden shadow-2xl ring-4 ring-white shadow-zinc-200/50 group">
+          {!isCameraActive && !capturedImage && !isProcessing && !currentResult && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center space-y-6">
+              <div className="w-20 h-20 bg-zinc-800 rounded-full flex items-center justify-center text-zinc-500">
+                <CameraIcon className="w-10 h-10" />
+              </div>
+              <div className="space-y-2">
+                <h3 className="text-white font-bold">Camera chưa sẵn sàng</h3>
+                <p className="text-zinc-400 text-sm">Vui lòng cấp quyền truy cập camera để bắt đầu chụp ảnh phương tiện.</p>
+              </div>
+              <button 
+                onClick={() => setIsCameraActive(true)}
+                className="px-6 py-3 bg-emerald-600 text-white font-bold rounded-2xl hover:bg-emerald-700 transition-all flex items-center gap-2 shadow-lg shadow-emerald-900/20"
+              >
+                <CameraIcon className="w-5 h-5" />
+                Kích hoạt Camera
+              </button>
+            </div>
+          )}
+
+          {isCameraActive && !capturedImage && !isProcessing && !currentResult && (
+            <div className="absolute inset-0">
+              <video 
+                ref={videoRef} 
+                autoPlay 
+                playsInline 
+                className={`w-full h-full object-cover cursor-crosshair transition-all duration-700 ${!location ? 'blur-2xl scale-110' : 'blur-0 scale-100'}`}
+                style={{ filter: `brightness(${focusPoint ? '1.4' : '1.15'}) contrast(1.05) saturate(1.1) ${!location ? 'blur(20px)' : 'blur(0px)'}` }}
+                onClick={handleVideoClick}
+              />
+              
+              {!location && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/40 backdrop-blur-sm text-white z-10">
+                  <Loader2 className="w-12 h-12 animate-spin text-emerald-500 mb-4" />
+                  <p className="font-black text-lg uppercase tracking-widest animate-pulse">Đang tải tọa độ GPS...</p>
+                  <p className="text-xs opacity-60 mt-2">Vui lòng chờ để đảm bảo tính xác thực</p>
+                </div>
+              )}
+
+              {/* Professional Camera UI Overlays */}
+              <div className="absolute inset-0 pointer-events-none">
+                {/* Corner Markers */}
+                <div className="absolute top-8 left-8 w-8 h-8 border-t-2 border-l-2 border-white/40 rounded-tl-lg" />
+                <div className="absolute top-8 right-8 w-8 h-8 border-t-2 border-r-2 border-white/40 rounded-tr-lg" />
+                <div className="absolute bottom-8 left-8 w-8 h-8 border-b-2 border-l-2 border-white/40 rounded-bl-lg" />
+                <div className="absolute bottom-8 right-8 w-8 h-8 border-b-2 border-r-2 border-white/40 rounded-br-lg" />
+                
+                {/* Grid Lines */}
+                <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 opacity-20">
+                  <div className="border-r border-white/30" />
+                  <div className="border-r border-white/30" />
+                  <div />
+                  <div className="border-b border-white/30 col-span-3" />
+                  <div className="border-b border-white/30 col-span-3" />
+                </div>
+              </div>
+              
+              {/* Focus Indicator (iPhone style) */}
+              <AnimatePresence>
+                {focusPoint && (
+                  <motion.div 
+                    initial={{ scale: 1.5, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="absolute pointer-events-none border border-yellow-400 w-16 h-16 flex items-center justify-center"
+                    style={{ left: focusPoint.x - 32, top: focusPoint.y - 32 }}
+                  >
+                    <div className="w-1 h-1 bg-yellow-400 rounded-full" />
+                    <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-0.5 h-1.5 bg-yellow-400" />
+                    <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-0.5 h-1.5 bg-yellow-400" />
+                    <div className="absolute top-1/2 -left-1 -translate-y-1/2 w-1.5 h-0.5 bg-yellow-400" />
+                    <div className="absolute top-1/2 -right-1 -translate-y-1/2 w-1.5 h-0.5 bg-yellow-400" />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* Real-time Overlay */}
+              <div className="absolute top-6 left-6 w-[50%] p-3 bg-black/40 backdrop-blur-md rounded-2xl border border-white/10 text-white text-[10px] font-mono space-y-1 drop-shadow-md z-20">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Clock className="w-3 h-3 text-emerald-400" />
+                    <span className="font-bold">{currentTime.toLocaleTimeString('vi-VN')}</span>
+                  </div>
+                  <div className={`w-1.5 h-1.5 ${location ? 'bg-emerald-500' : 'bg-red-500'} rounded-full animate-pulse`} />
+                </div>
+                <div className="flex items-start gap-2 overflow-hidden">
+                  <MapPin className="w-3 h-3 text-emerald-400 shrink-0 mt-0.5" />
+                  <div className="marquee-container w-full">
+                    <span className="animate-marquee-bounce font-black text-[8.5px] uppercase tracking-tight text-emerald-50">
+                      {locationName} • {location ? `${location.lat.toFixed(6)}, ${location.lng.toFixed(6)}` : 'Đang định vị...'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Upload Button (Top Right) */}
+              <div className="absolute top-6 right-6 z-30">
+                <label className="cursor-pointer p-3 bg-black/40 backdrop-blur-md rounded-full border border-white/20 text-white flex items-center justify-center hover:bg-black/50 transition-all shadow-lg">
+                  <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
+                  <Upload className="w-5 h-5" />
+                </label>
+              </div>
+
+              {/* Camera Controls */}
+              <AnimatePresence>
+                {location && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="absolute bottom-10 left-0 right-0 flex justify-center items-center gap-8"
+                  >
+                    <motion.button 
+                      whileHover={{ scale: 1.1 }}
+                      whileTap={{ scale: 0.9 }}
+                      onClick={toggleFlash}
+                      className={`relative overflow-hidden p-4 rounded-full transition-all border shadow-lg group ${isFlashOn ? 'bg-yellow-400 border-yellow-300 text-black' : 'bg-white/20 backdrop-blur-xl border-white/30 text-white'}`}
+                    >
+                      <Flashlight className={`w-6 h-6 ${isFlashOn ? 'fill-current' : ''}`} />
+                    </motion.button>
+
+                    <div className="flex flex-col items-center gap-2">
+                      <motion.button 
+                        whileHover={{ scale: location ? 1.05 : 1 }}
+                        whileTap={{ scale: location ? 0.9 : 1 }}
+                        onClick={capturePhoto}
+                        disabled={!location}
+                        className={`relative w-24 h-24 rounded-full border-[8px] border-white/50 flex items-center justify-center transition-all shadow-[0_0_30px_rgba(255,255,255,0.3)] bg-white/20 backdrop-blur-sm group ${!location ? 'opacity-30 cursor-not-allowed' : ''}`}
+                      >
+                        <div className="absolute inset-0 bg-gradient-to-tr from-white/20 to-transparent rounded-full pointer-events-none" />
+                        <div className="w-16 h-16 rounded-full bg-white shadow-inner group-active:bg-zinc-100 transition-colors flex items-center justify-center">
+                           <CameraIcon className="w-8 h-8 text-emerald-600" />
+                        </div>
+                      </motion.button>
+                      <span className="text-[9px] font-black text-white uppercase tracking-[0.2em] drop-shadow-lg">Chụp & Phân tích</span>
+                    </div>
+
+                    <motion.button 
+                      whileHover={{ scale: 1.1 }}
+                      whileTap={{ scale: 0.9 }}
+                      onClick={toggleCamera}
+                      className="relative overflow-hidden p-4 bg-white/20 backdrop-blur-xl rounded-full text-white hover:bg-white/30 transition-all border border-white/30 shadow-lg group"
+                    >
+                      <motion.div
+                        animate={{ rotate: [0, 180] }}
+                        transition={{ duration: 0.5, ease: "easeInOut" }}
+                        key={isCameraActive ? 'front' : 'back'}
+                      >
+                        <RefreshCw className="w-6 h-6" />
+                      </motion.div>
+                    </motion.button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
+
+          {(capturedImage || currentResult || isProcessing) && (
+            <div className="absolute inset-0">
+              {(capturedImage || currentResult?.imageUrl) && (
+                <img 
+                  src={capturedImage || currentResult?.imageUrl || ''} 
+                  className="w-full h-full object-cover" 
+                  style={{ filter: 'brightness(1.15) contrast(1.05) saturate(1.1)' }}
+                  alt="Captured" 
+                  onError={() => {
+                    setError("Không thể hiển thị hình ảnh. Vui lòng thử lại.");
+                    resetCapture();
+                  }}
+                />
+              )}
+              
+              {/* Post-Capture Data Overlay */}
+              <div className="absolute top-6 left-6 w-[50%] p-3 bg-black/40 backdrop-blur-xl rounded-2xl border border-white/20 text-white space-y-1 shadow-2xl z-20">
+                <div className="flex items-center justify-between border-b border-white/10 pb-1 mb-1">
+                  <div className="flex items-center gap-2">
+                    <Clock className="w-3 h-3 text-emerald-400" />
+                    <span className="text-[9px] font-black uppercase tracking-widest">
+                      {currentResult ? new Intl.DateTimeFormat('vi-VN', { timeStyle: 'short' }).format(new Date(currentResult.timestamp)) : new Date().toLocaleTimeString('vi-VN')}
+                    </span>
+                  </div>
+                  <span className="text-[7px] font-black bg-emerald-500 px-1.5 py-0.5 rounded-full uppercase">Verified</span>
+                </div>
+                <div className="flex items-start gap-2 overflow-hidden">
+                  <MapPin className="w-3 h-3 text-emerald-400 shrink-0 mt-0.5" />
+                  <div className="marquee-container w-full">
+                    <span className="animate-marquee-bounce text-[8.5px] font-black uppercase tracking-tight">
+                      {currentResult?.location?.address || locationName} • {(currentResult?.location?.lat || location?.lat || 0).toFixed(6)}, {(currentResult?.location?.lng || location?.lng || 0).toFixed(6)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Retake Button */}
+              {!isProcessing && (
+                <motion.button
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  onClick={resetCapture}
+                  className="absolute bottom-6 right-6 p-4 bg-white/20 backdrop-blur-xl border border-white/30 rounded-full text-white shadow-2xl hover:bg-white/30 transition-all active:scale-95 z-30"
+                >
+                  <motion.div
+                    animate={{ scale: [1, 1.1, 1] }}
+                    transition={{ repeat: Infinity, duration: 2 }}
+                  >
+                    <CameraIcon className="w-6 h-6" />
+                  </motion.div>
+                </motion.button>
+              )}
+
+              {isProcessing && (
+                <div className="absolute inset-0 bg-black/80 backdrop-blur-md flex flex-col items-center justify-center text-white gap-6">
+                  <div className="relative">
+                    <Loader2 className="w-16 h-16 animate-spin text-emerald-500" />
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div className="w-8 h-8 bg-emerald-500/20 rounded-full animate-pulse" />
+                    </div>
+                  </div>
+                  <div className="text-center space-y-2">
+                    <p className="font-black text-2xl tracking-tight uppercase italic">Đang phân tích</p>
+                    <p className="text-sm opacity-50 font-medium">AI đang nhận diện biển số & phương tiện</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+
+        {/* Error Message */}
+        <AnimatePresence>
+          {error && (
+            <motion.div 
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-red-50 border border-red-100 p-5 rounded-3xl flex flex-col gap-4 text-red-600 shadow-xl"
+            >
+              <div className="flex items-start gap-4">
+                <div className="p-2 bg-red-100 rounded-full shrink-0">
+                  <AlertCircle className="w-6 h-6" />
+                </div>
+                <div className="text-sm">
+                  <p className="font-black uppercase tracking-wider mb-1">Cảnh báo hệ thống</p>
+                  <p className="font-medium leading-relaxed">{error}</p>
+                </div>
+              </div>
+              <div className="flex gap-2 self-end">
+                <button 
+                  onClick={() => window.location.reload()}
+                  className="px-4 py-2.5 bg-zinc-900 text-white text-xs font-black uppercase tracking-widest rounded-xl hover:bg-black transition-all flex items-center gap-2 shadow-lg"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Tải lại trang
+                </button>
+                <button 
+                  onClick={() => {
+                    setError(null);
+                    setIsCameraActive(true);
+                  }}
+                  className="px-4 py-2.5 bg-red-600 text-white text-xs font-black uppercase tracking-widest rounded-xl hover:bg-red-700 transition-all flex items-center gap-2 shadow-lg"
+                >
+                  Thử lại
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Result Card */}
+        <AnimatePresence>
+          {currentResult && (
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="bg-white rounded-[2.5rem] p-8 shadow-2xl border border-zinc-100 space-y-8 ring-1 ring-zinc-200/50"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <div className="flex flex-col gap-2">
+                    <button 
+                      onClick={() => handleUpdateVehicleType('truck')}
+                      className={`p-3 rounded-xl border-2 transition-all ${currentResult?.vehicleType === 'truck' ? 'bg-emerald-500 border-emerald-400 text-white shadow-lg' : 'bg-zinc-50 border-zinc-100 text-zinc-400 hover:border-zinc-200'}`}
+                    >
+                      <Truck className="w-5 h-5" />
+                    </button>
+                    <button 
+                      onClick={() => handleUpdateVehicleType('ship')}
+                      className={`p-3 rounded-xl border-2 transition-all ${currentResult?.vehicleType === 'ship' ? 'bg-emerald-500 border-emerald-400 text-white shadow-lg' : 'bg-zinc-50 border-zinc-100 text-zinc-400 hover:border-zinc-200'}`}
+                    >
+                      <Ship className="w-5 h-5" />
+                    </button>
+                  </div>
+                  <div>
+                    <h3 className="font-black text-2xl tracking-tight italic uppercase text-zinc-900">
+                      <RenderSanitized value={currentResult?.idNumber} />
+                    </h3>
+                    <p className="text-[10px] text-emerald-600 uppercase tracking-[0.2em] font-black opacity-80">
+                      {currentResult?.vehicleType === 'truck' ? 'Xe Vận Tải' : 'Tàu Thủy'}
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="flex items-center justify-end gap-1.5 text-emerald-600 font-black text-lg italic">
+                    <CheckCircle2 className="w-5 h-5" />
+                    {Math.round((currentResult?.confidence || 0) * 100)}%
+                  </div>
+                  <p className="text-[9px] text-zinc-400 uppercase font-black tracking-widest">Độ tin cậy</p>
+                </div>
+              </div>
+
+              {/* Vehicle ID, Product Type & Volume Inputs */}
+              <div className="space-y-6">
+                <div className="space-y-3">
+                  <label className="text-[10px] font-black text-zinc-400 uppercase tracking-[0.15em] flex items-center gap-2 px-1">
+                    <QrCode className="w-3 h-3 text-emerald-500" /> Biển số / Số hiệu <span className="text-red-500">*</span>
+                  </label>
+                  <input 
+                    type="text"
+                    value={idNumberInput}
+                    onChange={(e) => handleUpdateIdNumber(e.target.value.toUpperCase())}
+                    placeholder="NHẬP BIỂN SỐ / SỐ HIỆU"
+                    className="w-full bg-zinc-50 border-2 border-zinc-100 rounded-2xl px-5 py-4 text-sm font-bold focus:ring-2 focus:ring-emerald-500 transition-all text-zinc-900 outline-none placeholder:text-zinc-300 uppercase"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-6">
+                  <div className="space-y-3">
+                    <label className="text-[10px] font-black text-zinc-400 uppercase tracking-[0.15em] flex items-center gap-2 px-1">
+                      <Box className="w-3 h-3 text-emerald-500" /> Loại hàng <span className="text-red-500">*</span>
+                    </label>
+                    <div className="relative">
+                      <select 
+                        value={currentResult?.productType || productType}
+                        onChange={(e) => handleUpdateProductType(e.target.value as 'Cát' | 'Đất')}
+                        className="w-full bg-emerald-50 border-2 border-emerald-100 rounded-2xl px-5 py-4 text-sm font-bold focus:ring-2 focus:ring-emerald-500 transition-all appearance-none text-emerald-900 outline-none"
+                      >
+                        <option value="Cát" className="bg-white">Cát</option>
+                        <option value="Đất" className="bg-white">Đất</option>
+                      </select>
+                      <div className="absolute right-5 top-1/2 -translate-y-1/2 pointer-events-none text-emerald-400">
+                        <RefreshCw className="w-4 h-4 rotate-90" />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="space-y-3">
+                    <label className="text-[10px] font-black text-zinc-400 uppercase tracking-[0.15em] flex items-center gap-2 px-1">
+                      <Truck className="w-3 h-3 text-blue-500" /> Số m³ <span className="text-red-500">*</span>
+                    </label>
+                    <input 
+                      type="text"
+                      inputMode="decimal"
+                      value={volumeInput}
+                      onChange={(e) => handleUpdateVolume(e.target.value)}
+                      placeholder="0.00"
+                      className="w-full bg-blue-50 border-2 border-blue-100 rounded-2xl px-5 py-4 text-sm font-bold focus:ring-2 focus:ring-blue-500 transition-all text-blue-900 outline-none placeholder:text-blue-300"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-4 pt-2">
+                <div className="flex items-start gap-4 p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+                  <MapPin className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-bold leading-snug text-zinc-800">{currentResult?.location?.address || "Đang cập nhật..."}</p>
+                    <p className="text-[10px] text-zinc-400 font-mono mt-1">
+                      {(currentResult?.location?.lat || 0).toFixed(6)}, {(currentResult?.location?.lng || 0).toFixed(6)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col items-center gap-4 p-6 bg-zinc-50 rounded-[2rem] border border-zinc-100 mb-4">
+                {currentResult && (
+                  <QRCodeSVG value={getQrData(currentResult)} size={140} level="H" />
+                )}
+                <div 
+                  onClick={() => setShowQrContent(!showQrContent)}
+                  className="flex flex-col items-center gap-2 cursor-pointer group"
+                >
+                  <div className="flex items-center gap-2 px-4 py-1.5 bg-white rounded-full border border-zinc-200 group-hover:border-emerald-500/30 group-hover:shadow-sm transition-all">
+                    <QrCode className="w-3.5 h-3.5 text-zinc-400 group-hover:text-emerald-500 transition-colors" />
+                    <span className="text-[9px] font-black text-zinc-500 uppercase tracking-[0.2em] group-hover:text-emerald-600 transition-colors">
+                      {showQrContent ? "Ẩn nội dung QR" : "Mã QR Bảo Mật"}
+                    </span>
+                  </div>
+                  {showQrContent && currentResult && (
+                    <motion.div 
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="w-full max-w-[200px] p-3 bg-white rounded-xl border border-zinc-200 shadow-sm text-[10px] font-mono text-zinc-600 whitespace-pre-wrap break-words text-center"
+                    >
+                      {getQrData(currentResult)}
+                    </motion.div>
+                  )}
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Sticky Action Buttons */}
+        <AnimatePresence>
+          {currentResult && (
+            <motion.div 
+              initial={{ y: 100 }}
+              animate={{ y: 0 }}
+              exit={{ y: 100 }}
+              className="fixed bottom-0 left-0 right-0 z-50 bg-white/20 backdrop-blur-2xl border-t border-zinc-200 py-3 px-6 flex gap-4 max-w-lg mx-auto rounded-t-[2rem] shadow-[0_-10px_40px_rgba(0,0,0,0.05)]"
+            >
+              <motion.button 
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={handleOpenPrint}
+                className="flex-1 relative overflow-hidden py-2.5 bg-gradient-to-r from-emerald-500 via-emerald-400 to-emerald-600 text-white rounded-xl font-black uppercase tracking-widest text-[10px] flex items-center justify-center gap-2 shadow-[0_5px_15px_rgba(16,185,129,0.2)]"
+              >
+                <div className="absolute inset-0 bg-gradient-to-b from-white/30 to-transparent pointer-events-none" />
+                <motion.div
+                  animate={{ 
+                    scale: [1, 1.2, 1],
+                    opacity: [1, 0.8, 1]
+                  }}
+                  transition={{ 
+                    duration: 2,
+                    repeat: Infinity,
+                    ease: "easeInOut"
+                  }}
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                </motion.div>
+                Lưu và xem trước
+              </motion.button>
+              <motion.button 
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={resetCapture}
+                className="flex-1 relative overflow-hidden py-2.5 bg-gradient-to-r from-blue-500 via-blue-400 to-blue-600 text-white rounded-xl font-black uppercase tracking-widest text-[10px] flex items-center justify-center gap-2 shadow-[0_5px_15px_rgba(59,130,246,0.2)]"
+              >
+                <div className="absolute inset-0 bg-gradient-to-b from-white/30 to-transparent pointer-events-none" />
+                <CameraIcon className="w-3.5 h-3.5" />
+                Chụp lại
+              </motion.button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* History Section */}
+        {!currentResult && (
+          <section className="space-y-6">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between px-2">
+                <h2 className="font-black text-[10px] text-zinc-400 uppercase tracking-[0.25em]">
+                  {searchQuery ? "Kết quả tìm kiếm" : "Lịch sử hôm nay"}
+                </h2>
+                <div className="flex items-center gap-2">
+                  {history.length > 0 && !searchQuery && (
+                    <button 
+                      onClick={clearAllHistory}
+                      className="text-[9px] font-black text-red-500 hover:text-red-600 uppercase tracking-widest transition-colors mr-2"
+                    >
+                      Xóa tất cả
+                    </button>
+                  )}
+                  <span className="text-[9px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100 uppercase">
+                    {filteredHistory.length} {searchQuery ? "Kết quả" : "Chuyến"}
+                  </span>
+                </div>
+              </div>
+              
+              {/* Search Bar */}
+              <div className="relative group">
+                <div className="absolute inset-y-0 left-5 flex items-center pointer-events-none">
+                  <Truck className="w-4 h-4 text-zinc-400 group-focus-within:text-emerald-500 transition-colors" />
+                </div>
+                <input 
+                  type="text"
+                  placeholder="Tìm biển số xe / số hiệu tàu..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full bg-white border-2 border-zinc-100 rounded-2xl py-4 pl-12 pr-5 text-sm font-bold focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 transition-all outline-none shadow-sm placeholder:text-zinc-300"
+                />
+                {searchQuery && (
+                  <button 
+                    onClick={() => setSearchQuery("")}
+                    className="absolute inset-y-0 right-5 flex items-center text-zinc-400 hover:text-zinc-600"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="grid gap-4">
+              {filteredHistory.length > 0 ? (
+                filteredHistory.map((record) => (
+                  <motion.div 
+                    key={record.id}
+                    layout
+                    onClick={() => {
+                      setCurrentResult(record);
+                      setVolumeInput(record.volume || "");
+                      setIdNumberInput(record.idNumber && record.idNumber !== '---' ? record.idNumber : "");
+                      setProductType(record.productType || "Cát");
+                      setShowQrContent(false);
+                      stopCamera();
+                    }}
+                    className="bg-white p-4 rounded-3xl border border-zinc-200 flex items-center gap-4 hover:border-emerald-500/30 hover:shadow-lg transition-all group cursor-pointer active:scale-[0.98] w-full max-w-full overflow-hidden"
+                  >
+                    <div className="relative w-16 h-16 shrink-0">
+                      <img src={record.imageUrl} className="w-full h-full rounded-2xl object-cover ring-1 ring-zinc-100" alt="Lịch sử" />
+                      <div className="absolute -bottom-1 -right-1 bg-emerald-500 p-1 rounded-lg border-2 border-white">
+                        {record.vehicleType === 'truck' ? <Truck className="w-2.5 h-2.5 text-white" /> : <Ship className="w-2.5 h-2.5 text-white" />}
+                      </div>
+                    </div>
+                    <div className="flex-1 min-w-0 space-y-0.5">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h4 className="font-black text-base tracking-tight italic uppercase text-zinc-900 leading-tight">
+                            <RenderSanitized value={record?.idNumber} />
+                          </h4>
+                          <p className="text-[9px] font-bold text-zinc-400 uppercase tracking-tighter">#{record.id.slice(-8)}</p>
+                        </div>
+                        {searchQuery && (
+                          <div className="flex items-center gap-2">
+                            <button 
+                              onClick={(e) => handleEditRecord(record, e)}
+                              className="p-1.5 text-zinc-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors"
+                            >
+                              <RefreshCw className="w-3.5 h-3.5" />
+                            </button>
+                            <button 
+                              onClick={(e) => handleDeleteRecord(record.id, e)}
+                              className="p-1.5 text-zinc-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      <div className="marquee-container">
+                        <p className="text-xs text-zinc-500 font-medium animate-marquee-bounce inline-block">
+                          {record?.location?.address || "Vị trí không xác định"}
+                        </p>
+                      </div>
+                      <div className="flex gap-2 pt-1">
+                        <span className="text-[9px] text-zinc-400 font-bold">
+                          {(() => {
+                            try {
+                              return new Intl.DateTimeFormat('vi-VN', { timeStyle: 'short' }).format(new Date(record.timestamp));
+                            } catch (e) {
+                              return "---";
+                            }
+                          })()}
+                        </span>
+                        {record?.productType && (
+                          <span className="text-[9px] bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-full font-black uppercase tracking-tighter border border-emerald-100">
+                            {record.productType}
+                          </span>
+                        )}
+                        {record?.volume && (
+                          <span className="text-[9px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full font-black uppercase tracking-tighter border border-blue-100">
+                            {record.volume} m³
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </motion.div>
+                ))
+              ) : (
+                <div className="py-12 text-center space-y-3 bg-white rounded-[2.5rem] border-2 border-dashed border-zinc-100">
+                  <div className="bg-zinc-50 w-12 h-12 rounded-full flex items-center justify-center mx-auto">
+                    <History className="w-6 h-6 text-zinc-300" />
+                  </div>
+                  <p className="text-sm font-bold text-zinc-400">Không tìm thấy dữ liệu phù hợp</p>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+      </main>
+
+      {/* Edit Modal */}
+      <AnimatePresence>
+        {isEditing && editForm && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsEditing(false)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="relative w-full max-w-md bg-white rounded-[2.5rem] p-8 shadow-2xl space-y-6"
+            >
+              <div className="flex items-center justify-between">
+                <h3 className="font-black text-xl uppercase italic tracking-tight">Chỉnh sửa thông tin</h3>
+                <button onClick={() => setIsEditing(false)} className="p-2 hover:bg-zinc-100 rounded-full transition-colors">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest px-1">Loại phương tiện</label>
+                  <div className="flex gap-4">
+                    <button 
+                      onClick={() => setEditForm({ ...editForm, vehicleType: 'truck' })}
+                      className={`flex-1 py-3 rounded-2xl border-2 flex items-center justify-center gap-2 transition-all ${editForm.vehicleType === 'truck' ? 'bg-emerald-500 border-emerald-400 text-white shadow-lg' : 'bg-zinc-50 border-zinc-100 text-zinc-400 hover:border-zinc-200'}`}
+                    >
+                      <Truck className="w-4 h-4" />
+                      <span className="text-[10px] font-black uppercase tracking-widest">Xe tải</span>
+                    </button>
+                    <button 
+                      onClick={() => setEditForm({ ...editForm, vehicleType: 'ship' })}
+                      className={`flex-1 py-3 rounded-2xl border-2 flex items-center justify-center gap-2 transition-all ${editForm.vehicleType === 'ship' ? 'bg-emerald-500 border-emerald-400 text-white shadow-lg' : 'bg-zinc-50 border-zinc-100 text-zinc-400 hover:border-zinc-200'}`}
+                    >
+                      <Ship className="w-4 h-4" />
+                      <span className="text-[10px] font-black uppercase tracking-widest">Tàu thủy</span>
+                    </button>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest px-1">Biển số / Số hiệu</label>
+                  <input 
+                    type="text"
+                    value={editForm.idNumber}
+                    onChange={(e) => setEditForm({ ...editForm, idNumber: e.target.value })}
+                    className="w-full bg-zinc-50 border-2 border-zinc-100 rounded-2xl px-5 py-4 text-sm font-bold focus:border-emerald-500 outline-none transition-all"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest px-1">Loại hàng</label>
+                    <select 
+                      value={editForm.productType}
+                      onChange={(e) => setEditForm({ ...editForm, productType: e.target.value as 'Cát' | 'Đất' })}
+                      className="w-full bg-zinc-50 border-2 border-zinc-100 rounded-2xl px-5 py-4 text-sm font-bold focus:border-emerald-500 outline-none transition-all"
+                    >
+                      <option value="Cát">Cát</option>
+                      <option value="Đất">Đất</option>
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest px-1">Số m³</label>
+                    <input 
+                      type="text"
+                      value={editForm.volume}
+                      onChange={(e) => setEditForm({ ...editForm, volume: e.target.value })}
+                      className="w-full bg-zinc-50 border-2 border-zinc-100 rounded-2xl px-5 py-4 text-sm font-bold focus:border-emerald-500 outline-none transition-all"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button 
+                  onClick={() => setIsEditing(false)}
+                  className="flex-1 py-4 bg-zinc-100 text-zinc-600 rounded-2xl font-black uppercase tracking-widest text-xs"
+                >
+                  Hủy
+                </button>
+                <button 
+                  onClick={saveEdit}
+                  className="flex-1 py-4 bg-emerald-500 text-white rounded-2xl font-black uppercase tracking-widest text-xs shadow-lg shadow-emerald-500/20"
+                >
+                  Lưu thay đổi
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Print View Modal */}
+      <AnimatePresence>
+        {showPrintView && currentResult && (
+          <div className="fixed inset-0 z-[100] bg-zinc-900/60 backdrop-blur-md print:bg-white print:overflow-visible">
+            {/* Scrollable Content Area */}
+            <div className="absolute inset-0 overflow-y-auto pb-40 print:relative print:pb-0 print:overflow-visible flex flex-col items-center">
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="w-full flex flex-col items-center py-10 px-4 print:py-0 print:px-0"
+              >
+                {/* Delivery Note Content */}
+                <div id="printable-ticket" className={`bg-white shadow-[0_30px_100px_rgba(0,0,0,0.2)] print:shadow-none transition-all duration-500 ${isThermalMode ? 'w-[88mm] min-h-[120mm] p-6' : 'w-[148mm] min-h-[210mm] p-10'} text-black relative overflow-hidden rounded-[2rem] print:rounded-none`}>
+                  {/* Decorative Elements for A5 mode */}
+                  {!isThermalMode && (
+                    <>
+                      <div className="absolute top-0 left-0 w-full h-1.5 bg-zinc-900" />
+                    </>
+                  )}
+
+                  {/* Header */}
+                  <div className="flex flex-col items-center text-center border-b-2 border-zinc-900 pb-4 mb-6 space-y-3">
+                    <div className="space-y-1">
+                      <h2 className={`${isThermalMode ? 'text-[11px]' : 'text-base'} font-black uppercase tracking-tight leading-tight text-zinc-900`}>{COMPANY_INFO.name}</h2>
+                      <div className="flex items-center justify-center gap-2">
+                        <span className="bg-zinc-900 text-white text-[8px] px-1.5 py-0.5 font-black rounded uppercase">MST</span>
+                        <p className={`${isThermalMode ? 'text-[9px]' : 'text-[11px]'} font-bold text-zinc-600`}>{COMPANY_INFO.taxId}</p>
+                      </div>
+                      <p className={`${isThermalMode ? 'text-[8px]' : 'text-[10px]'} text-zinc-500 max-w-xs leading-tight mx-auto font-medium`}>{COMPANY_INFO.address}</p>
+                    </div>
+                    <div className="w-full pt-3 border-t border-dashed border-zinc-200">
+                      <h1 className={`${isThermalMode ? 'text-xl' : 'text-3xl'} font-black uppercase tracking-tighter text-zinc-900 italic`}>Phiếu Xuất Kho</h1>
+                      <p className={`${isThermalMode ? 'text-[9px]' : 'text-[11px]'} font-bold text-zinc-600 uppercase tracking-wider mt-0.5 whitespace-nowrap`}>Dự án nạo vét Đông Hải</p>
+                      <div className="mt-1.5 flex items-center justify-center gap-2">
+                        <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">Số phiếu:</span>
+                        <span className="text-[11px] font-black font-mono text-zinc-900">{currentResult?.id || '---'}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Main Info Grid */}
+                  <div className={`grid ${isThermalMode ? 'grid-cols-1 gap-4' : 'grid-cols-2 gap-6'}`}>
+                    {/* Left Column: Vehicle & Cargo */}
+                    <div className={`${isThermalMode ? 'space-y-1' : 'space-y-4'} flex-1`}>
+                      <div className="space-y-2">
+                        <h4 className="text-[8px] font-black uppercase tracking-[0.3em] text-zinc-400 border-b border-zinc-100 pb-1">Thông tin vận chuyển</h4>
+                        
+                        {isThermalMode ? (
+                          <div className="flex items-center justify-between gap-2">
+                            {/* 3 Lines Stack for Thermal */}
+                            <div className="space-y-1.5 flex-1">
+                              <div>
+                                <p className="text-[7px] font-bold text-zinc-400 uppercase tracking-widest">Biển số / Số hiệu</p>
+                                <p className="text-lg font-black italic tracking-tighter text-zinc-900 leading-none">
+                                  <RenderSanitized value={currentResult?.idNumber} />
+                                </p>
+                              </div>
+                              <div className="flex items-baseline gap-1">
+                                <p className="text-[7px] font-black text-zinc-400 uppercase tracking-widest">Loại hàng:</p>
+                                <p className="text-xs font-black text-zinc-900 truncate">
+                                  <RenderSanitized value={currentResult?.productType} />
+                                </p>
+                              </div>
+                              <div className="flex items-baseline gap-1">
+                                <p className="text-[7px] font-black text-zinc-400 uppercase tracking-widest">Khối lượng:</p>
+                                <div className="flex items-baseline gap-0.5">
+                                  <p className="text-base font-black text-zinc-900 leading-none">{currentResult?.volume || '0'}</p>
+                                  <p className="text-[8px] font-black text-zinc-500 uppercase">m³</p>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* QR Code for 88mm mode */}
+                            <div className="flex flex-col items-center gap-1 shrink-0">
+                              <div className="p-1 bg-white border-2 border-zinc-900 rounded-lg">
+                                <QRCodeSVG value={getQrData(currentResult!)} size={82} level="H" />
+                              </div>
+                              <p className="text-[6px] font-black text-zinc-400 uppercase tracking-[0.1em] text-center leading-tight">Mã xác thực</p>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="flex items-center gap-3">
+                              <div className="p-2 bg-zinc-50 rounded-xl border border-zinc-100">
+                                {currentResult?.vehicleType === 'truck' ? <Truck className="w-5 h-5 text-zinc-900" /> : <Ship className="w-5 h-5 text-zinc-900" />}
+                              </div>
+                              <div>
+                                <p className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">Biển số / Số hiệu</p>
+                                <p className="text-2xl font-black italic tracking-tighter text-zinc-900">
+                                  <RenderSanitized value={currentResult?.idNumber} />
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {!isThermalMode && (
+                        <div className="space-y-1">
+                          <div className="flex items-baseline gap-2">
+                            <p className="text-[8px] font-black text-zinc-400 uppercase tracking-widest">Loại hàng hóa:</p>
+                            <p className="text-sm font-black text-zinc-900">
+                              <RenderSanitized value={currentResult?.productType} />
+                            </p>
+                          </div>
+                          <div className="flex items-baseline gap-2">
+                            <p className="text-[8px] font-black text-zinc-400 uppercase tracking-widest">Khối lượng thực tế:</p>
+                            <div className="flex items-baseline gap-1">
+                              <p className="text-lg font-black text-zinc-900">{currentResult?.volume || '0'}</p>
+                              <p className="text-[10px] font-black text-zinc-500 uppercase">m³</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Right Column: Time & Location */}
+                    <div className="space-y-4">
+                      <div className="space-y-2">
+                        <h4 className="text-[8px] font-black uppercase tracking-[0.3em] text-zinc-400 border-b border-zinc-100 pb-1">Thời gian & Địa điểm</h4>
+                        <div className="space-y-2">
+                          <div className="flex items-start gap-2">
+                            <div className="mt-0.5 p-1 bg-zinc-100 rounded-md">
+                              <Clock className="w-2.5 h-2.5 text-zinc-500" />
+                            </div>
+                            <div>
+                              <p className="text-[8px] font-black text-zinc-400 uppercase tracking-widest">Thời gian</p>
+                              <p className="text-[10px] font-black text-zinc-900">
+                                {(() => {
+                                  try {
+                                    return new Intl.DateTimeFormat('vi-VN', { 
+                                      dateStyle: 'medium', 
+                                      timeStyle: 'short' 
+                                    }).format(new Date(currentResult?.timestamp || Date.now()));
+                                  } catch (e) {
+                                    return "---";
+                                  }
+                                })()}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-start gap-2">
+                            <div className="mt-0.5 p-1 bg-zinc-100 rounded-md">
+                              <MapPin className="w-2.5 h-2.5 text-zinc-500" />
+                            </div>
+                            <div>
+                              <p className="text-[8px] font-black text-zinc-400 uppercase tracking-widest">Địa điểm</p>
+                              <p className="text-[9px] font-bold text-zinc-800 leading-tight">{currentResult?.location?.address || 'Chưa xác định'}</p>
+                            </div>
+                          </div>
+
+                          {/* QR Code for A5 mode - below location */}
+                          {!isThermalMode && (
+                            <div className="pt-4 flex flex-col items-center gap-2">
+                              <div className="p-2 bg-white border-2 border-zinc-900 rounded-2xl shadow-sm">
+                                <QRCodeSVG value={getQrData(currentResult!)} size={100} level="H" />
+                              </div>
+                              <div className="text-center">
+                                <p className="text-[8px] font-black text-zinc-900 uppercase tracking-[0.2em]">Mã xác thực điện tử</p>
+                                <p className="text-[6px] font-bold text-zinc-400 uppercase tracking-widest mt-0.5 italic">Quét để kiểm tra tính hợp lệ</p>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Footer / Signatures */}
+                  <div className="mt-6 pt-4 border-t border-zinc-100 grid grid-cols-2 gap-4 text-center">
+                    <div className="space-y-8">
+                      <p className="text-[8px] font-black uppercase tracking-widest">Người giao</p>
+                    </div>
+                    <div className="space-y-8">
+                      <p className="text-[8px] font-black uppercase tracking-widest">Người nhận</p>
+                    </div>
+                  </div>
+
+                  {/* Print Footer */}
+                  <div className="mt-8 text-center border-t border-zinc-100 pt-4">
+                    <p className="text-[8px] text-zinc-400 font-bold uppercase tracking-[0.3em]">Hệ thống quản lý nạo vét thông minh v2.0</p>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
+
+            {/* Fixed Controls Footer - Hidden on Print */}
+            <div className="fixed bottom-0 left-0 right-0 z-[120] p-4 sm:p-6 bg-white/90 backdrop-blur-2xl border-t border-zinc-200 print:hidden shadow-[0_-10px_50px_rgba(0,0,0,0.15)]">
+              <div className="max-w-2xl mx-auto flex items-center justify-between gap-3 sm:gap-4">
+                <div className="flex items-center gap-2 sm:gap-3">
+                  <div className="flex items-center gap-2 text-red-600">
+                    <motion.div
+                      animate={{ 
+                        scale: [1, 1.1, 1],
+                        filter: ["drop-shadow(0 0 2px rgba(220, 38, 38, 0.3))", "drop-shadow(0 0 8px rgba(220, 38, 38, 0.6))", "drop-shadow(0 0 2px rgba(220, 38, 38, 0.3))"]
+                      }}
+                      transition={{ duration: 2, repeat: Infinity }}
+                    >
+                      <Eye className="w-5 h-5 sm:w-6 sm:h-6" />
+                    </motion.div>
+                    <span className="text-[12px] sm:text-sm font-black uppercase tracking-[0.1em] drop-shadow-sm">Xem in</span>
+                  </div>
+                  <div className="hidden xs:block border-l border-zinc-200 pl-3">
+                    <h3 className="text-[10px] sm:text-xs font-black uppercase tracking-widest text-zinc-900">Xem trước phiếu in</h3>
+                    <p className="text-[8px] sm:text-[9px] font-bold text-zinc-400 uppercase tracking-tight">Kiểm tra thông tin trước khi xuất</p>
+                  </div>
+                </div>
+                
+                <div className="flex items-center gap-2 flex-1 justify-end">
+                  <button 
+                    onClick={() => setIsThermalMode(!isThermalMode)}
+                    className={`h-10 sm:h-12 px-3 sm:px-5 rounded-xl sm:rounded-2xl text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all border-2 ${isThermalMode ? 'bg-emerald-500 border-emerald-400 text-white shadow-lg shadow-emerald-500/20' : 'bg-zinc-50 border-zinc-200 text-zinc-500 hover:bg-zinc-100'}`}
+                  >
+                    {isThermalMode ? 'Khổ 88mm' : 'Khổ A5'}
+                  </button>
+                  <button 
+                    onClick={handlePrint}
+                    className="h-10 sm:h-12 px-4 sm:px-6 bg-gradient-to-r from-blue-500 via-blue-400 to-blue-600 text-white rounded-xl sm:rounded-2xl text-[9px] sm:text-[10px] font-black uppercase tracking-widest hover:from-blue-600 hover:to-blue-700 transition-all shadow-xl shadow-blue-500/30 flex items-center gap-2 relative overflow-hidden"
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-b from-white/30 to-transparent pointer-events-none" />
+                    <Printer className="w-3.5 h-3.5 sm:w-4 h-4" />
+                    <span className="hidden xs:inline">In Phiếu</span>
+                    <span className="xs:hidden">In</span>
+                  </button>
+
+                  <button 
+                    onClick={handleDownloadPDF}
+                    className="h-10 sm:h-12 px-4 sm:px-6 bg-zinc-900 text-white rounded-xl sm:rounded-2xl text-[9px] sm:text-[10px] font-black uppercase tracking-widest hover:bg-black transition-all shadow-xl shadow-black/20 flex items-center gap-2 relative overflow-hidden"
+                  >
+                    <FileDown className="w-3.5 h-3.5 sm:w-4 h-4" />
+                    <span className="hidden xs:inline">Tải PDF</span>
+                    <span className="xs:hidden">PDF</span>
+                  </button>
+                  <button 
+                    onClick={() => setShowPrintView(false)}
+                    className="h-10 w-10 sm:h-12 sm:w-12 flex items-center justify-center bg-zinc-100 hover:bg-zinc-200 rounded-xl sm:rounded-2xl text-zinc-500 transition-all border border-zinc-200"
+                  >
+                    <X className="w-4 h-4 sm:w-5 sm:h-5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <canvas ref={canvasRef} className="hidden" />
+    </div>
+  );
+}

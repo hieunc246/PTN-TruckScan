@@ -1026,6 +1026,8 @@ Thời gian: ${timeStr}`;
     return matchesSearch && isToday(record.timestamp);
   });
 
+  const totalVolume = filteredHistory.reduce((sum, record) => sum + (parseFloat(record.volume || "0") || 0), 0);
+
   const totalPages = Math.ceil(filteredHistory.length / itemsPerPage);
   const paginatedHistory = filteredHistory.slice(
     (currentPage - 1) * itemsPerPage,
@@ -1749,14 +1751,11 @@ Thời gian: ${timeStr}`;
                   {searchQuery ? "Kết quả tìm kiếm" : "Lịch sử hôm nay"}
                 </h2>
                 <div className="flex items-center gap-2">
-                  {history.length > 0 && !searchQuery && (
-                    <button 
-                      onClick={clearAllHistory}
-                      className="text-[9px] font-black text-red-500 hover:text-red-600 uppercase tracking-widest transition-colors mr-2"
-                    >
-                      Xóa tất cả
-                    </button>
-                  )}
+                  <span className="text-[9px] font-black text-white bg-blue-600 px-2.5 py-1 rounded-full border border-blue-500 uppercase shadow-[0_4px_12px_rgba(37,99,235,0.4)] relative overflow-hidden mr-1 flex items-center gap-1.5">
+                    <div className="absolute top-0 left-0 right-0 h-[40%] bg-white/20 pointer-events-none" />
+                    <Box className="w-2.5 h-2.5" />
+                    Tổng: {totalVolume.toFixed(2)} m³
+                  </span>
                   <span className="text-[9px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100 uppercase">
                     {filteredHistory.length} {searchQuery ? "Kết quả" : "Chuyến"}
                   </span>

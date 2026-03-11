@@ -1,5 +1,5 @@
 {
   "name": "LogiTrack AI",
   "description": "Ứng dụng chuyên nghiệp để theo dõi phương tiện vận chuyển hàng hóa bằng AI. Tự động nhận diện số hiệu xe tải, tàu thủy từ ảnh chụp, kèm theo thời gian và vị trí chính xác.",
-  "requestFramePermissions": ["camera", "geolocation"]
+  "requestFramePermissions": ["camera", "geolocation", "microphone"]
 }

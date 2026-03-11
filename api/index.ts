@@ -505,12 +505,14 @@ const getSheetsClient = async () => {
         serviceAccountEmail = credentials.client_email || serviceAccountEmail;
       } catch (e) {}
 
+      const spreadsheetIdUsed = process.env.GOOGLE_SHEETS_ID || "1ayrzQ3JTxuZuhXaxtoQN6jHS1T78sCHPhO2PDScJhhI";
+      
       if (error.code === 404) {
-        message = `Không tìm thấy Spreadsheet ID: ${process.env.GOOGLE_SHEETS_ID || "mặc định"}. Hãy đảm bảo bạn đã nhập đúng ID trong Vercel Environment Variables.`;
+        message = `Không tìm thấy Spreadsheet ID: ${spreadsheetIdUsed}. Hãy đảm bảo bạn đã nhập đúng ID trong Vercel Environment Variables.`;
       } else if (error.message?.includes('Requested entity was not found')) {
-        message = `Không tìm thấy tab "D-Login" trong Google Sheet. Vui lòng tạo tab tên "D-Login" với các cột: TT, ID, Mật khẩu.`;
+        message = `Không tìm thấy tab "D-Login" trong Google Sheet (ID: ${spreadsheetIdUsed}). Vui lòng tạo tab tên "D-Login" với các cột: TT, ID, Mật khẩu.`;
       } else if (error.code === 403) {
-        message = `Lỗi quyền truy cập (403). Hãy đảm bảo bạn đã chia sẻ Google Sheet với email: ${serviceAccountEmail} với quyền "Người chỉnh sửa" (Editor).`;
+        message = `Lỗi quyền truy cập (403) cho Sheet ID: ${spreadsheetIdUsed}. Hãy đảm bảo bạn đã chia sẻ Google Sheet này với email: ${serviceAccountEmail} với quyền "Người chỉnh sửa" (Editor).`;
       }
       res.status(500).json({ error: message });
     }

@@ -461,18 +461,37 @@ async function startServer() {
       // Find user with matching ID and password
       // Skip header row if it exists (assuming first row is header if it contains "ID")
       const startIndex = rows[0][0] === "ID" ? 1 : 0;
-      const user = rows.slice(startIndex).find(row => row[0] === id && row[1] === password);
+      
+      // Trim values to avoid issues with accidental spaces in Google Sheets
+      const user = rows.slice(startIndex).find(row => {
+        const sheetId = (row[0] || "").toString().trim();
+        const sheetPass = (row[1] || "").toString().trim();
+        return sheetId === id.trim() && sheetPass === password.trim();
+      });
 
       if (user) {
         res.json({ success: true, userId: id });
       } else {
-        res.status(401).json({ error: "ID hoặc Mật khẩu không chính xác. Vui lòng nhập lại." });
+        res.status(401).json({ error: "ID hoặc Mật khẩu không chính xác. Vui lòng kiểm tra lại dữ liệu trong tab 'D-Login'." });
       }
     } catch (error: any) {
       console.error("Error during login:", error);
       let message = error.message;
-      if (error.message?.includes('Requested entity was not found')) {
+      
+      // Extract service account email for the error message
+      let serviceAccountEmail = "Service Account email";
+      try {
+        const key = process.env.GOOGLE_SERVICE_ACCOUNT_KEY || '';
+        const credentials = JSON.parse(key.startsWith('{') ? key : key.substring(key.indexOf('{')));
+        serviceAccountEmail = credentials.client_email || serviceAccountEmail;
+      } catch (e) {}
+
+      if (error.code === 404) {
+        message = `Không tìm thấy Spreadsheet ID: ${process.env.GOOGLE_SHEETS_ID || "mặc định"}. Hãy đảm bảo bạn đã nhập đúng ID trong Vercel Environment Variables.`;
+      } else if (error.message?.includes('Requested entity was not found')) {
         message = `Không tìm thấy tab "D-Login" trong Google Sheet. Vui lòng tạo tab tên "D-Login" với các cột: TT, ID, Mật khẩu.`;
+      } else if (error.code === 403) {
+        message = `Lỗi quyền truy cập (403). Hãy đảm bảo bạn đã chia sẻ Google Sheet với email: ${serviceAccountEmail} với quyền "Người chỉnh sửa" (Editor).`;
       }
       res.status(500).json({ error: message });
     }

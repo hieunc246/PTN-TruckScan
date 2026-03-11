@@ -1033,102 +1033,119 @@ Thời gian: ${timeStr}`;
 
   // --- UI Components ---
 
-  if (!isLoggedIn) {
-    return (
-      <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-4 relative overflow-hidden">
-        {/* Background Decorative Elements */}
-        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-emerald-500/10 blur-[120px] rounded-full" />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-500/10 blur-[120px] rounded-full" />
-        
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="w-full max-w-md relative z-10"
-        >
-          <div className="bg-zinc-900/50 backdrop-blur-2xl border border-white/10 rounded-[2.5rem] p-8 sm:p-10 shadow-2xl">
-            <div className="text-center mb-10">
-              <div className="w-20 h-20 bg-emerald-500 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-lg shadow-emerald-500/20 rotate-3">
-                <Box className="w-10 h-10 text-white" />
-              </div>
-              <h1 className="text-3xl font-black text-white uppercase tracking-tighter italic mb-2">Hệ Thống Quản Lý</h1>
-              <p className="text-zinc-400 font-bold text-xs uppercase tracking-[0.2em]">Dự án nạo vét Đông Hải</p>
-            </div>
-
-            <form onSubmit={handleLogin} className="space-y-6">
-              <div className="space-y-2">
-                <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest px-1">ID Tài khoản</label>
-                <div className="relative group">
-                  <div className="absolute inset-y-0 left-5 flex items-center pointer-events-none text-zinc-500 group-focus-within:text-emerald-500 transition-colors">
-                    <User className="w-5 h-5" />
-                  </div>
-                  <input 
-                    type="text"
-                    required
-                    value={loginId}
-                    onChange={(e) => setLoginId(e.target.value)}
-                    placeholder="Nhập ID của bạn"
-                    className="w-full bg-zinc-800/50 border-2 border-zinc-700/50 rounded-2xl py-4 pl-14 pr-5 text-white font-bold focus:border-emerald-500 outline-none transition-all placeholder:text-zinc-600"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest px-1">Mật khẩu</label>
-                <div className="relative group">
-                  <div className="absolute inset-y-0 left-5 flex items-center pointer-events-none text-zinc-500 group-focus-within:text-emerald-500 transition-colors">
-                    <Lock className="w-5 h-5" />
-                  </div>
-                  <input 
-                    type="password"
-                    required
-                    value={loginPassword}
-                    onChange={(e) => setLoginPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full bg-zinc-800/50 border-2 border-zinc-700/50 rounded-2xl py-4 pl-14 pr-5 text-white font-bold focus:border-emerald-500 outline-none transition-all placeholder:text-zinc-600"
-                  />
-                </div>
-              </div>
-
-              {loginError && (
-                <motion.div 
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  className="bg-red-500/10 border border-red-500/20 p-4 rounded-2xl flex items-center gap-3"
-                >
-                  <AlertCircle className="w-5 h-5 text-red-500 shrink-0" />
-                  <p className="text-xs font-bold text-red-400">{loginError}</p>
-                </motion.div>
-              )}
-
-              <button 
-                type="submit"
-                disabled={isLoggingIn}
-                className="w-full h-16 bg-emerald-500 hover:bg-emerald-600 disabled:bg-zinc-700 text-white rounded-2xl font-black uppercase tracking-widest transition-all shadow-xl shadow-emerald-500/20 flex items-center justify-center gap-3 active:scale-[0.98]"
-              >
-                {isLoggingIn ? (
-                  <Loader2 className="w-6 h-6 animate-spin" />
-                ) : (
-                  <>
-                    <LogIn className="w-5 h-5" />
-                    Đăng nhập ngay
-                  </>
-                )}
-              </button>
-            </form>
-
-            <div className="mt-10 pt-8 border-t border-white/5 text-center">
-              <p className="text-[10px] text-zinc-600 font-bold uppercase tracking-widest">Phiên bản v2.5 • Bảo mật bởi Google Cloud</p>
-            </div>
-          </div>
-        </motion.div>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-zinc-50 text-zinc-900 font-sans selection:bg-emerald-500/30 print:bg-white print:text-black">
-      {/* Header - Hidden on Print */}
-      <header className="fixed top-0 left-0 right-0 z-50 bg-white/80 backdrop-blur-xl border-b border-zinc-200 px-6 py-4 flex items-center justify-between print:hidden">
+      {!isLoggedIn ? (
+        <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-4 relative overflow-hidden">
+          {/* Background Decorative Elements */}
+          <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-emerald-500/10 blur-[120px] rounded-full" />
+          <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-500/10 blur-[120px] rounded-full" />
+          
+          <motion.div 
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="w-full max-w-md relative z-10"
+          >
+            <div className="bg-zinc-900/50 backdrop-blur-2xl border border-white/10 rounded-[2.5rem] p-8 sm:p-10 shadow-2xl">
+              <div className="text-center mb-10">
+                <div className="w-20 h-20 bg-emerald-500 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-lg shadow-emerald-500/20 rotate-3">
+                  <Box className="w-10 h-10 text-white" />
+                </div>
+                <h1 className="text-3xl font-black text-white uppercase tracking-tighter italic mb-2">Hệ Thống Quản Lý</h1>
+                <p className="text-zinc-400 font-bold text-xs uppercase tracking-[0.2em]">Dự án nạo vét Đông Hải</p>
+              </div>
+
+              <form onSubmit={handleLogin} className="space-y-6">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest px-1">ID Tài khoản</label>
+                  <div className="relative group">
+                    <div className="absolute inset-y-0 left-5 flex items-center pointer-events-none text-zinc-500 group-focus-within:text-emerald-500 transition-colors">
+                      <User className="w-5 h-5" />
+                    </div>
+                    <input 
+                      type="text"
+                      required
+                      value={loginId}
+                      onChange={(e) => setLoginId(e.target.value)}
+                      placeholder="Nhập ID của bạn"
+                      className="w-full bg-zinc-800/50 border-2 border-zinc-700/50 rounded-2xl py-4 pl-14 pr-5 text-white font-bold focus:border-emerald-500 outline-none transition-all placeholder:text-zinc-600"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest px-1">Mật khẩu</label>
+                  <div className="relative group">
+                    <div className="absolute inset-y-0 left-5 flex items-center pointer-events-none text-zinc-500 group-focus-within:text-emerald-500 transition-colors">
+                      <Lock className="w-5 h-5" />
+                    </div>
+                    <input 
+                      type="password"
+                      required
+                      value={loginPassword}
+                      onChange={(e) => setLoginPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full bg-zinc-800/50 border-2 border-zinc-700/50 rounded-2xl py-4 pl-14 pr-5 text-white font-bold focus:border-emerald-500 outline-none transition-all placeholder:text-zinc-600"
+                    />
+                  </div>
+                </div>
+
+                {loginError && (
+                  <motion.div 
+                    initial={{ opacity: 0, x: -10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    className="bg-red-500/10 border border-red-500/20 p-4 rounded-2xl flex flex-col gap-2"
+                  >
+                    <div className="flex items-center gap-3">
+                      <AlertCircle className="w-5 h-5 text-red-500 shrink-0" />
+                      <p className="text-xs font-bold text-red-400">{loginError}</p>
+                    </div>
+                    {loginError.includes("403") || loginError.includes("404") || loginError.includes("ID") ? (
+                      <button 
+                        type="button"
+                        onClick={checkConfig}
+                        className="text-[10px] text-emerald-400 font-black uppercase tracking-widest hover:text-emerald-300 transition-colors mt-1 flex items-center gap-2"
+                      >
+                        <Settings className="w-3 h-3" />
+                        Kiểm tra cấu hình hệ thống
+                      </button>
+                    ) : null}
+                  </motion.div>
+                )}
+
+                <button 
+                  type="submit"
+                  disabled={isLoggingIn}
+                  className="w-full h-16 bg-emerald-500 hover:bg-emerald-600 disabled:bg-zinc-700 text-white rounded-2xl font-black uppercase tracking-widest transition-all shadow-xl shadow-emerald-500/20 flex items-center justify-center gap-3 active:scale-[0.98]"
+                >
+                  {isLoggingIn ? (
+                    <Loader2 className="w-6 h-6 animate-spin" />
+                  ) : (
+                    <>
+                      <LogIn className="w-5 h-5" />
+                      Đăng nhập ngay
+                    </>
+                  )}
+                </button>
+              </form>
+
+              <div className="mt-10 pt-8 border-t border-white/5 text-center space-y-4">
+                <p className="text-[10px] text-zinc-600 font-bold uppercase tracking-widest">Phiên bản v2.5 • Bảo mật bởi Google Cloud</p>
+                <button 
+                  onClick={checkConfig}
+                  className="text-[9px] text-zinc-500 font-bold uppercase tracking-widest hover:text-emerald-500 transition-colors flex items-center justify-center gap-2 mx-auto"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isDebugLoading ? 'animate-spin' : ''}`} />
+                  Kiểm tra kết nối Google Sheet
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      ) : (
+        <>
+          {/* Header - Hidden on Print */}
+          <header className="fixed top-0 left-0 right-0 z-50 bg-white/80 backdrop-blur-xl border-b border-zinc-200 px-6 py-4 flex items-center justify-between print:hidden">
         <div className="flex items-center gap-3">
           <div className="bg-emerald-500 p-2 rounded-xl shadow-lg shadow-emerald-500/20">
             <Truck className="w-5 h-5 text-white" />
@@ -1653,7 +1670,10 @@ Thời gian: ${timeStr}`;
           )}
         </AnimatePresence>
 
-        {/* Debug Info Overlay */}
+          </>
+      )}
+
+      {/* Debug Info Overlay */}
         <AnimatePresence>
           {debugInfo && (
             <motion.div 

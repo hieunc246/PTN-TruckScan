@@ -55,6 +55,12 @@ const getSheetsClient = async () => {
       };
 
       credentials = tryParse(key);
+
+      // Fix for OpenSSL DECODER routines::unsupported error
+      // Ensure private_key has real newlines instead of literal "\n" strings
+      if (credentials && credentials.private_key) {
+        credentials.private_key = credentials.private_key.replace(/\\n/g, '\n');
+      }
     } catch (e: any) {
       console.error("Failed to parse GOOGLE_SERVICE_ACCOUNT_KEY:", e);
       throw new Error(`Lỗi cấu hình Google Service Account: ${e.message}`);

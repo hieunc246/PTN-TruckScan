@@ -116,7 +116,10 @@ const getSheetsClient = async () => {
       } = req.body;
 
       if (!process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
-        return res.status(500).json({ error: "GOOGLE_SERVICE_ACCOUNT_KEY not configured" });
+        return res.status(500).json({ 
+          error: "Hệ thống chưa được cấu hình Google Service Account Key.",
+          details: "Vui lòng thêm biến môi trường GOOGLE_SERVICE_ACCOUNT_KEY vào Vercel Settings > Environment Variables. Giá trị phải là toàn bộ nội dung file JSON của Service Account."
+        });
       }
 
       const spreadsheetId = process.env.GOOGLE_SHEETS_ID || "1ayrzQ3JTxuZuhXaxtoQN6jHS1T78sCHPhO2PDScJhhI";
@@ -238,7 +241,10 @@ const getSheetsClient = async () => {
       }
 
       if (!process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
-        return res.status(500).json({ error: "GOOGLE_SERVICE_ACCOUNT_KEY not configured" });
+        return res.status(500).json({ 
+          error: "Hệ thống chưa được cấu hình Google Service Account Key.",
+          details: "Vui lòng thêm biến môi trường GOOGLE_SERVICE_ACCOUNT_KEY vào Vercel Settings > Environment Variables. Giá trị phải là toàn bộ nội dung file JSON của Service Account."
+        });
       }
 
       const spreadsheetId = process.env.GOOGLE_SHEETS_ID || "1ayrzQ3JTxuZuhXaxtoQN6jHS1T78sCHPhO2PDScJhhI";
@@ -279,7 +285,10 @@ const getSheetsClient = async () => {
       }
 
       if (!process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
-        return res.status(500).json({ error: "GOOGLE_SERVICE_ACCOUNT_KEY not configured" });
+        return res.status(500).json({ 
+          error: "Hệ thống chưa được cấu hình Google Service Account Key.",
+          details: "Vui lòng thêm biến môi trường GOOGLE_SERVICE_ACCOUNT_KEY vào Vercel Settings > Environment Variables. Giá trị phải là toàn bộ nội dung file JSON của Service Account."
+        });
       }
 
       const spreadsheetId = process.env.GOOGLE_SHEETS_ID || "1ayrzQ3JTxuZuhXaxtoQN6jHS1T78sCHPhO2PDScJhhI";
@@ -343,7 +352,10 @@ const getSheetsClient = async () => {
   app.get("/api/get-history", async (req, res) => {
     try {
       if (!process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
-        return res.status(500).json({ error: "GOOGLE_SERVICE_ACCOUNT_KEY not configured" });
+        return res.status(500).json({ 
+          error: "Hệ thống chưa được cấu hình Google Service Account Key.",
+          details: "Vui lòng thêm biến môi trường GOOGLE_SERVICE_ACCOUNT_KEY vào Vercel Settings > Environment Variables. Giá trị phải là toàn bộ nội dung file JSON của Service Account."
+        });
       }
 
       const spreadsheetId = process.env.GOOGLE_SHEETS_ID || "1ayrzQ3JTxuZuhXaxtoQN6jHS1T78sCHPhO2PDScJhhI";
@@ -407,7 +419,10 @@ const getSheetsClient = async () => {
       }
 
       if (!process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
-        return res.status(500).json({ error: "GOOGLE_SERVICE_ACCOUNT_KEY not configured" });
+        return res.status(500).json({ 
+          error: "Hệ thống chưa được cấu hình Google Service Account Key.",
+          details: "Vui lòng thêm biến môi trường GOOGLE_SERVICE_ACCOUNT_KEY vào Vercel Settings > Environment Variables. Giá trị phải là toàn bộ nội dung file JSON của Service Account."
+        });
       }
 
       const spreadsheetId = process.env.GOOGLE_SHEETS_ID || "1ayrzQ3JTxuZuhXaxtoQN6jHS1T78sCHPhO2PDScJhhI";

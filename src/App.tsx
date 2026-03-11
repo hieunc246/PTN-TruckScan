@@ -211,18 +211,36 @@ export default function App() {
 
   // --- Initialization ---
   useEffect(() => {
-    try {
-      const savedHistory = localStorage.getItem(STORAGE_KEY);
-      if (savedHistory) {
-        setHistory(JSON.parse(savedHistory));
+    const loadHistory = async () => {
+      try {
+        // 1. Try to load from LocalStorage first for immediate UI
+        const savedHistory = localStorage.getItem(STORAGE_KEY);
+        if (savedHistory) {
+          setHistory(JSON.parse(savedHistory));
+        }
+
+        // 2. Then fetch from Google Sheets to synchronize
+        if (isLoggedIn) {
+          const response = await fetch('/api/get-history');
+          if (response.ok) {
+            const data = await response.json();
+            if (data.history && data.history.length > 0) {
+              // Merge or replace? Replacing is cleaner for "synchronization"
+              setHistory(data.history);
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(data.history.slice(0, 20)));
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Failed to load history", e);
+        // Don't clear localStorage on network error
       }
-    } catch (e) {
-      console.error("Failed to load history", e);
-      localStorage.removeItem(STORAGE_KEY);
-    }
+    };
+
+    loadHistory();
     // Auto-start camera
     setIsCameraActive(true);
-  }, []);
+  }, [isLoggedIn]);
 
   // --- Error Auto-clear ---
   useEffect(() => {
@@ -251,10 +269,10 @@ export default function App() {
           }
 
           try {
-            // Try with high quality first
+            // Try with high quality first, using 'ideal' for better compatibility
             stream = await navigator.mediaDevices.getUserMedia({
               video: { 
-                facingMode: facingMode,
+                facingMode: { ideal: facingMode },
                 width: { ideal: 1920 },
                 height: { ideal: 1080 }
               },
@@ -263,41 +281,31 @@ export default function App() {
           } catch (err: any) {
             console.warn("High-quality camera failed, trying basic...", err);
             try {
-              // Fallback 1: Basic video with facingMode
+              // Fallback 1: Basic video with facingMode ideal
               stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: facingMode },
+                video: { facingMode: { ideal: facingMode } },
                 audio: false,
               });
             } catch (fallbackErr: any) {
-              console.warn("Basic camera with facingMode failed, trying other facingMode...", fallbackErr);
+              console.warn("Basic camera with facingMode failed, trying any camera...", fallbackErr);
               try {
-                // Fallback 2: Try the opposite facingMode (e.g. if environment fails, try user)
-                const otherFacingMode = facingMode === 'environment' ? 'user' : 'environment';
+                // Fallback 2: Any available camera (crucial for desktops/laptops)
                 stream = await navigator.mediaDevices.getUserMedia({
-                  video: { facingMode: otherFacingMode },
+                  video: true,
                   audio: false,
                 });
-              } catch (otherFacingErr: any) {
-                console.warn("Opposite facingMode failed, trying any camera...", otherFacingErr);
+              } catch (finalErr: any) {
+                // Check if any video devices even exist
                 try {
-                  // Fallback 3: Any available camera (crucial for desktops/laptops)
-                  stream = await navigator.mediaDevices.getUserMedia({
-                    video: true,
-                    audio: false,
-                  });
-                } catch (finalErr: any) {
-                  // Check if any video devices even exist
-                  try {
-                    const devices = await navigator.mediaDevices.enumerateDevices();
-                    const hasVideo = devices.some(d => d.kind === 'videoinput');
-                    if (!hasVideo) {
-                      throw new Error("Không tìm thấy thiết bị camera nào được kết nối với hệ thống. Nếu bạn đang dùng máy tính bàn, hãy đảm bảo đã cắm webcam.");
-                    }
-                  } catch (enumErr) {
-                    // If enumerateDevices fails, just throw the original error
+                  const devices = await navigator.mediaDevices.enumerateDevices();
+                  const hasVideo = devices.some(d => d.kind === 'videoinput');
+                  if (!hasVideo) {
+                    throw new Error("Không tìm thấy thiết bị camera nào được kết nối với hệ thống. Nếu bạn đang dùng máy tính bàn, hãy đảm bảo đã cắm webcam.");
                   }
-                  throw finalErr; // Re-throw to be caught by the outer catch
+                } catch (enumErr) {
+                  // If enumerateDevices fails, just throw the original error
                 }
+                throw finalErr; // Re-throw to be caught by the outer catch
               }
             }
           }
@@ -1398,6 +1406,19 @@ Thời gian: ${timeStr}`;
                   <p className="font-black uppercase tracking-wider mb-1">Cảnh báo hệ thống</p>
                   <p className="font-medium leading-relaxed">{error}</p>
                   <p className="mt-2 text-[11px] opacity-70 italic">Mẹo: Nếu camera không hoạt động, bạn có thể chọn "Tải ảnh từ máy" để tiếp tục công việc.</p>
+                  {error.includes("CAMERA") && (
+                    <button 
+                      onClick={() => {
+                        setError(null);
+                        setIsCameraActive(false);
+                        setTimeout(() => setIsCameraActive(true), 100);
+                      }}
+                      className="mt-3 px-4 py-2 bg-red-600 text-white text-[10px] font-black uppercase tracking-widest rounded-xl hover:bg-red-700 transition-all flex items-center gap-2 shadow-lg"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      Thử lại ngay
+                    </button>
+                  )}
                 </div>
               </div>
               <div className="flex flex-wrap gap-2 justify-end">

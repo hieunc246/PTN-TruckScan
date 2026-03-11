@@ -341,6 +341,64 @@ async function startServer() {
     }
   });
 
+  // API Route to fetch all history from Google Sheets
+  app.get("/api/get-history", async (req, res) => {
+    try {
+      if (!process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
+        return res.status(500).json({ error: "GOOGLE_SERVICE_ACCOUNT_KEY not configured" });
+      }
+
+      const spreadsheetId = process.env.GOOGLE_SHEETS_ID || "1ayrzQ3JTxuZuhXaxtoQN6jHS1T78sCHPhO2PDScJhhI";
+      const sheets = await getSheetsClient();
+
+      const response = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: "D-App!A:I",
+      });
+
+      const rows = response.data.values;
+      if (!rows || rows.length <= 1) {
+        return res.json({ history: [] });
+      }
+
+      // Assuming first row is header
+      const history = rows.slice(1).map(row => {
+        // Parse date and time back to timestamp
+        const [day, month, year] = row[1].split('/');
+        const [hours, minutes] = row[2].split(':');
+        const fullYear = `20${year}`;
+        const timestamp = new Date(
+          parseInt(fullYear), 
+          parseInt(month) - 1, 
+          parseInt(day), 
+          parseInt(hours), 
+          parseInt(minutes)
+        ).toISOString();
+
+        const [lat, lng] = (row[7] || '0, 0').split(',').map((s: string) => parseFloat(s.trim()));
+
+        return {
+          id: row[0],
+          timestamp,
+          vehicleType: row[3] === 'Xe tải' ? 'truck' : 'ship',
+          idNumber: row[4],
+          volume: row[5],
+          productType: row[6],
+          location: {
+            lat,
+            lng,
+            address: row[8]
+          }
+        };
+      });
+
+      res.json({ history });
+    } catch (error: any) {
+      console.error("Error fetching history from Google Sheets:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // API Route for Login
   app.post("/api/login", async (req, res) => {
     try {

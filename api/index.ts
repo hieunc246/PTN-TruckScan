@@ -512,7 +512,7 @@ const getSheetsClient = async () => {
       } else if (error.message?.includes('Requested entity was not found')) {
         message = `Không tìm thấy tab "D-Login" trong Google Sheet (ID: ${spreadsheetIdUsed}). Vui lòng tạo tab tên "D-Login" với các cột: TT, ID, Mật khẩu.`;
       } else if (error.code === 403) {
-        message = `Lỗi quyền truy cập (403) cho Sheet ID: ${spreadsheetIdUsed}. Hãy đảm bảo bạn đã chia sẻ Google Sheet này với email: ${serviceAccountEmail} với quyền "Người chỉnh sửa" (Editor).`;
+        message = `Lỗi quyền truy cập (403) cho Sheet ID: ${spreadsheetIdUsed}. Chi tiết: ${error.message}. Hãy đảm bảo bạn đã: 1. Chia sẻ Sheet cho email ${serviceAccountEmail} (Editor). 2. Bật Google Sheets API tại Google Cloud Console.`;
       }
       res.status(500).json({ error: message });
     }

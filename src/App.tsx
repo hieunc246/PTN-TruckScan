@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, useCallback, MouseEvent } from 'react';
-import { Camera, MapPin, Clock, Truck, Ship, History, X, CheckCircle2, AlertCircle, Loader2, CameraIcon, RefreshCw, Printer, Box, QrCode, Flashlight, Upload, Eye, FileDown, Smartphone, Cloud, Settings } from 'lucide-react';
+import { useState, useRef, useEffect, useCallback, MouseEvent, FormEvent } from 'react';
+import { Camera, MapPin, Clock, Truck, Ship, History, X, CheckCircle2, AlertCircle, Loader2, CameraIcon, RefreshCw, Printer, Box, QrCode, Flashlight, Upload, Eye, FileDown, Smartphone, Cloud, Settings, Trash2, ChevronDown, Search, ChevronLeft, ChevronRight, Lock, User, LogIn, LogOut } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { motion, AnimatePresence } from 'motion/react';
@@ -13,6 +13,7 @@ interface CaptureRecord {
   imageUrl: string;
   vehicleType: 'truck' | 'ship' | 'unknown';
   idNumber: string;
+  customerCode?: string;
   timestamp: string;
   location: {
     lat: number;
@@ -40,6 +41,14 @@ const COMPANY_INFO = {
 };
 
 export default function App() {
+  const [isLoggedIn, setIsLoggedIn] = useState(() => {
+    return localStorage.getItem('isLoggedIn') === 'true';
+  });
+  const [loginId, setLoginId] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -49,6 +58,7 @@ export default function App() {
   const [currentResult, setCurrentResult] = useState<CaptureRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [idNumberInput, setIdNumberInput] = useState("");
+  const [customerCodeInput, setCustomerCodeInput] = useState("");
   const [volumeInput, setVolumeInput] = useState("");
   const [productType, setProductType] = useState<'Cát' | 'Đất'>('Cát');
   const [showPrintView, setShowPrintView] = useState(false);
@@ -56,10 +66,46 @@ export default function App() {
   const [isThermalMode, setIsThermalMode] = useState(true);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [focusPoint, setFocusPoint] = useState<{ x: number; y: number } | null>(null);
+  const [isNewRecord, setIsNewRecord] = useState(false);
+  const [isModified, setIsModified] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchType, setSearchType] = useState<'all' | 'id' | 'idNumber' | 'customerCode'>('all');
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
   const [isEditing, setIsEditing] = useState(false);
   const [isSavingToSheet, setIsSavingToSheet] = useState(false);
+  const [isDeletingFromSheet, setIsDeletingFromSheet] = useState(false);
   const [editForm, setEditForm] = useState<CaptureRecord | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [recordToDelete, setRecordToDelete] = useState<string | null>(null);
+
+  const deleteFromGoogleSheet = async (id: string): Promise<boolean> => {
+    setIsDeletingFromSheet(true);
+    try {
+      const response = await fetch('/api/delete-from-sheet', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ id }),
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        // If not found in sheet, we still consider it a success for the UI
+        if (response.status === 404) return true;
+        throw new Error(errorData.error || 'Lỗi khi xóa khỏi Google Sheets');
+      }
+      
+      return true;
+    } catch (err: any) {
+      console.error('Sheet delete error:', err);
+      alert(`Lỗi khi xóa trên Google Sheet: ${err.message}`);
+      return false;
+    } finally {
+      setIsDeletingFromSheet(false);
+    }
+  };
 
   const saveToGoogleSheet = async (record: CaptureRecord): Promise<boolean> => {
     setIsSavingToSheet(true);
@@ -223,25 +269,35 @@ export default function App() {
                 audio: false,
               });
             } catch (fallbackErr: any) {
-              console.warn("Basic camera with facingMode failed, trying any camera...", fallbackErr);
+              console.warn("Basic camera with facingMode failed, trying other facingMode...", fallbackErr);
               try {
-                // Fallback 2: Any available camera (crucial for desktops/laptops)
+                // Fallback 2: Try the opposite facingMode (e.g. if environment fails, try user)
+                const otherFacingMode = facingMode === 'environment' ? 'user' : 'environment';
                 stream = await navigator.mediaDevices.getUserMedia({
-                  video: true,
+                  video: { facingMode: otherFacingMode },
                   audio: false,
                 });
-              } catch (finalErr: any) {
-                // Check if any video devices even exist
+              } catch (otherFacingErr: any) {
+                console.warn("Opposite facingMode failed, trying any camera...", otherFacingErr);
                 try {
-                  const devices = await navigator.mediaDevices.enumerateDevices();
-                  const hasVideo = devices.some(d => d.kind === 'videoinput');
-                  if (!hasVideo) {
-                    throw new Error("Không tìm thấy thiết bị camera nào được kết nối với hệ thống. Nếu bạn đang dùng máy tính bàn, hãy đảm bảo đã cắm webcam.");
+                  // Fallback 3: Any available camera (crucial for desktops/laptops)
+                  stream = await navigator.mediaDevices.getUserMedia({
+                    video: true,
+                    audio: false,
+                  });
+                } catch (finalErr: any) {
+                  // Check if any video devices even exist
+                  try {
+                    const devices = await navigator.mediaDevices.enumerateDevices();
+                    const hasVideo = devices.some(d => d.kind === 'videoinput');
+                    if (!hasVideo) {
+                      throw new Error("Không tìm thấy thiết bị camera nào được kết nối với hệ thống. Nếu bạn đang dùng máy tính bàn, hãy đảm bảo đã cắm webcam.");
+                    }
+                  } catch (enumErr) {
+                    // If enumerateDevices fails, just throw the original error
                   }
-                } catch (enumErr) {
-                  // If enumerateDevices fails, just throw the original error
+                  throw finalErr; // Re-throw to be caught by the outer catch
                 }
-                throw finalErr; // Re-throw to be caught by the outer catch
               }
             }
           }
@@ -388,23 +444,63 @@ export default function App() {
 
   const generateTicketId = () => {
     const now = new Date();
-    const yymmdd = now.getFullYear().toString().slice(-2) + 
-                   (now.getMonth() + 1).toString().padStart(2, '0') + 
-                   now.getDate().toString().padStart(2, '0');
+    const yy = now.getFullYear().toString().slice(-2);
+    const mm = (now.getMonth() + 1).toString().padStart(2, '0');
+    const dd = now.getDate().toString().padStart(2, '0');
     const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    const randomLetter = letters[Math.floor(Math.random() * letters.length)];
-    const randomDigits = Math.floor(1000 + Math.random() * 9000).toString();
-    return `${yymmdd}${randomLetter}${randomDigits}`;
+    
+    let ticketId = "";
+    let isUnique = false;
+    let attempts = 0;
+    
+    while (!isUnique && attempts < 100) {
+      const randomLetter = letters[Math.floor(Math.random() * letters.length)];
+      const randomDigits = Math.floor(1000 + Math.random() * 9000).toString();
+      ticketId = `${yy}${randomLetter}${mm}${dd}${randomDigits}`;
+      
+      // Check if this ID already exists in history
+      const exists = history.some(record => record.id === ticketId);
+      if (!exists) {
+        isUnique = true;
+      }
+      attempts++;
+    }
+    
+    return ticketId;
   };
 
   const processImage = async (base64Image: string) => {
+    // Immediately stop camera and show the form
+    if (isCameraActive) stopCamera();
+    
+    const initialRecord: CaptureRecord = {
+      id: generateTicketId(),
+      imageUrl: base64Image,
+      vehicleType: 'truck',
+      idNumber: '---',
+      customerCode: '',
+      timestamp: new Date().toISOString(),
+      location: {
+        lat: location?.lat || 0,
+        lng: location?.lng || 0,
+        address: locationName || "Đang xác định vị trí...",
+      },
+      confidence: 0,
+      productType: productType,
+      volume: volumeInput,
+    };
+
+    setCurrentResult(initialRecord);
+    setIsNewRecord(true);
+    setIsModified(false);
+    setHistory(prev => [initialRecord, ...prev]);
+    setCapturedImage(null);
     setIsProcessing(true);
     setError(null);
 
     const callAI = async (retryCount = 0): Promise<GeminiResult> => {
       try {
         const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
-        // Optimized prompt: No image sent, only coordinates for location name
         const prompt = `Reverse geocode: ${location?.lat}, ${location?.lng}. 
         JSON: {"locationName": "string"}`;
 
@@ -441,41 +537,32 @@ export default function App() {
 
     try {
       if (!process.env.GEMINI_API_KEY) {
-        throw new Error("Thiếu cấu hình API Key.");
+        setIsProcessing(false);
+        return;
       }
 
       const resultData = await callAI();
 
-      const newRecord: CaptureRecord = {
-        id: generateTicketId(),
-        imageUrl: base64Image,
-        vehicleType: resultData.vehicleType && resultData.vehicleType !== 'unknown' ? resultData.vehicleType : 'truck',
-        idNumber: '---',
-        timestamp: new Date().toISOString(),
-        location: {
-          lat: location?.lat || 0,
-          lng: location?.lng || 0,
-          address: resultData.locationName || locationName || "Vị trí không xác định",
-        },
-        confidence: resultData.confidence || 0,
-        productType: productType,
-        volume: volumeInput,
-      };
-
-      setCurrentResult(newRecord);
-      setHistory(prev => [newRecord, ...prev]);
-      // Clear temporary image to free memory since it's now in currentResult/history
-      setCapturedImage(null);
+      setCurrentResult(prev => {
+        if (!prev || prev.id !== initialRecord.id) return prev;
+        const updated = {
+          ...prev,
+          vehicleType: resultData.vehicleType && resultData.vehicleType !== 'unknown' ? resultData.vehicleType : prev.vehicleType,
+          location: {
+            ...prev.location,
+            address: resultData.locationName || prev.location.address,
+          },
+          confidence: resultData.confidence || prev.confidence,
+        };
+        // Update history as well
+        setHistory(hPrev => hPrev.map(r => r.id === initialRecord.id ? updated : r));
+        return updated;
+      });
     } catch (err: any) {
       console.error("AI Processing error", err);
-      if (err.message?.includes('429')) {
-        setError("Hệ thống đang quá tải (429). Vui lòng đợi 1 phút và thử lại.");
-      } else {
-        setError("Lỗi xử lý hình ảnh hoặc kết nối AI. Vui lòng thử lại.");
-      }
+      // Silently fail or show a subtle hint since the user is already at the form
     } finally {
       setIsProcessing(false);
-      if (isCameraActive) stopCamera();
     }
   };
 
@@ -540,14 +627,25 @@ export default function App() {
 
   const handleUpdateIdNumber = (val: string) => {
     setIdNumberInput(val);
+    setIsModified(true);
     if (currentResult) {
       setCurrentResult({ ...currentResult, idNumber: val });
       setHistory(prev => prev.map(r => r.id === currentResult.id ? { ...r, idNumber: val } : r));
     }
   };
 
+  const handleUpdateCustomerCode = (val: string) => {
+    setCustomerCodeInput(val);
+    setIsModified(true);
+    if (currentResult) {
+      setCurrentResult({ ...currentResult, customerCode: val });
+      setHistory(prev => prev.map(r => r.id === currentResult.id ? { ...r, customerCode: val } : r));
+    }
+  };
+
   const handleUpdateVolume = (val: string) => {
     setVolumeInput(val);
+    setIsModified(true);
     if (currentResult) {
       const updated = { ...currentResult, volume: val };
       setCurrentResult(updated);
@@ -555,8 +653,30 @@ export default function App() {
     }
   };
 
+  // Fetch previous volume for vehicle
+  useEffect(() => {
+    if (!idNumberInput || idNumberInput.length < 3) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/get-vehicle-volume/${encodeURIComponent(idNumberInput)}`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data.volume && !volumeInput) {
+            handleUpdateVolume(data.volume);
+          }
+        }
+      } catch (err) {
+        console.error("Error fetching vehicle volume:", err);
+      }
+    }, 800); // Debounce 800ms
+
+    return () => clearTimeout(timer);
+  }, [idNumberInput]);
+
   const handleUpdateProductType = (val: 'Cát' | 'Đất') => {
     setProductType(val);
+    setIsModified(true);
     if (currentResult) {
       const updated = { ...currentResult, productType: val };
       setCurrentResult(updated);
@@ -565,6 +685,7 @@ export default function App() {
   };
 
   const handleUpdateVehicleType = (val: 'truck' | 'ship') => {
+    setIsModified(true);
     if (currentResult) {
       const updated = { ...currentResult, vehicleType: val };
       setCurrentResult(updated);
@@ -588,7 +709,10 @@ export default function App() {
     setError(null);
     setVolumeInput("");
     setIdNumberInput("");
+    setCustomerCodeInput("");
     setShowQrContent(false);
+    setIsNewRecord(false);
+    setIsModified(false);
     startCamera();
   };
 
@@ -606,9 +730,15 @@ export default function App() {
     }
 
     if (currentResult) {
-      const success = await saveToGoogleSheet(currentResult);
-      if (!success) {
-        return; // Stop if saving to sheet fails
+      // Only save if it's a new record OR it has been modified
+      if (isNewRecord || isModified) {
+        const success = await saveToGoogleSheet(currentResult);
+        if (!success) {
+          return; // Stop if saving to sheet fails
+        }
+        // After successful save, it's no longer "new" or "modified" relative to the sheet
+        setIsNewRecord(false);
+        setIsModified(false);
       }
     }
     
@@ -684,7 +814,7 @@ export default function App() {
       toast.remove();
     } catch (err) {
       console.error('Print Error:', err);
-      toast.innerHTML = '❌ Lỗi khi chuẩn bị bản in. Thử lại hoặc dùng "Tải PDF".';
+      toast.innerHTML = '❌ Lỗi khi chuẩn bị bản in. Vui lòng thử lại.';
       setTimeout(() => toast.remove(), 3000);
       
       // Fallback to standard print
@@ -742,6 +872,42 @@ export default function App() {
     }
   };
 
+  const handleLogin = async (e: FormEvent) => {
+    e.preventDefault();
+    setLoginError(null);
+    setIsLoggingIn(true);
+
+    try {
+      const response = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: loginId, password: loginPassword }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        setIsLoggedIn(true);
+        localStorage.setItem('isLoggedIn', 'true');
+        localStorage.setItem('userId', data.userId);
+      } else {
+        setLoginError(data.error || "Đăng nhập thất bại");
+      }
+    } catch (err) {
+      setLoginError("Lỗi kết nối máy chủ. Vui lòng thử lại.");
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const handleLogout = () => {
+    setIsLoggedIn(false);
+    localStorage.removeItem('isLoggedIn');
+    localStorage.removeItem('userId');
+    setIsCameraActive(false);
+    setCurrentResult(null);
+  };
+
   // --- QR Data Generation ---
   const sanitizeValue = (val: string | undefined | null) => {
     if (!val || val.toLowerCase() === 'unknown' || val.toLowerCase() === 'none' || val === '___' || val === 'N/A' || val === '---') {
@@ -769,15 +935,12 @@ export default function App() {
       console.error("Date format error", e);
     }
     
-    const vehicleTypeText = record.vehicleType === 'truck' ? 'Xe tải' : record.vehicleType === 'ship' ? 'Tàu thủy' : 'Chưa xác định';
-    
     return `THÔNG TIN PHIẾU XUẤT KHO
 Sản phẩm: ${sanitizeValue(record.productType)}
 Phương tiện: ${sanitizeValue(record.idNumber)}
-Loại: ${vehicleTypeText}
+Mã KH: ${sanitizeValue(record.customerCode)}
 Số m³: ${record.volume || '0'} m³
-Thời gian: ${timeStr}
-Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
+Thời gian: ${timeStr}`;
   };
 
   const clearAllHistory = () => {
@@ -790,10 +953,24 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
     }
   };
 
-  const handleDeleteRecord = (id: string, e: MouseEvent) => {
+  const handleDeleteRecord = async (id: string, e: MouseEvent) => {
     e.stopPropagation();
-    if (confirm("Bạn có chắc chắn muốn xóa bản ghi này?")) {
-      setHistory(prev => prev.filter(r => r.id !== id));
+    setRecordToDelete(id);
+    setShowDeleteConfirm(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!recordToDelete) return;
+    
+    const success = await deleteFromGoogleSheet(recordToDelete);
+    if (success) {
+      setHistory(prev => prev.filter(r => r.id !== recordToDelete));
+      if (currentResult?.id === recordToDelete) {
+        setCurrentResult(null);
+        setIsCameraActive(true);
+      }
+      setShowDeleteConfirm(false);
+      setRecordToDelete(null);
     }
   };
 
@@ -820,12 +997,125 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
   };
 
   const filteredHistory = history.filter(record => {
-    const matchesSearch = record.idNumber.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                         record.id.toLowerCase().includes(searchQuery.toLowerCase());
+    if (!searchQuery) return isToday(record.timestamp);
+    
+    const query = searchQuery.toLowerCase();
+    let matchesSearch = false;
+    
+    if (searchType === 'all') {
+      matchesSearch = record.idNumber.toLowerCase().includes(query) || 
+                      record.id.toLowerCase().includes(query) ||
+                      (record.customerCode || "").toLowerCase().includes(query);
+    } else if (searchType === 'id') {
+      matchesSearch = record.id.toLowerCase().includes(query);
+    } else if (searchType === 'idNumber') {
+      matchesSearch = record.idNumber.toLowerCase().includes(query);
+    } else if (searchType === 'customerCode') {
+      matchesSearch = (record.customerCode || "").toLowerCase().includes(query);
+    }
+    
     return matchesSearch && isToday(record.timestamp);
   });
 
+  const totalPages = Math.ceil(filteredHistory.length / itemsPerPage);
+  const paginatedHistory = filteredHistory.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
+
   // --- UI Components ---
+
+  if (!isLoggedIn) {
+    return (
+      <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-4 relative overflow-hidden">
+        {/* Background Decorative Elements */}
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-emerald-500/10 blur-[120px] rounded-full" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-500/10 blur-[120px] rounded-full" />
+        
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="w-full max-w-md relative z-10"
+        >
+          <div className="bg-zinc-900/50 backdrop-blur-2xl border border-white/10 rounded-[2.5rem] p-8 sm:p-10 shadow-2xl">
+            <div className="text-center mb-10">
+              <div className="w-20 h-20 bg-emerald-500 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-lg shadow-emerald-500/20 rotate-3">
+                <Box className="w-10 h-10 text-white" />
+              </div>
+              <h1 className="text-3xl font-black text-white uppercase tracking-tighter italic mb-2">Hệ Thống Quản Lý</h1>
+              <p className="text-zinc-400 font-bold text-xs uppercase tracking-[0.2em]">Dự án nạo vét Đông Hải</p>
+            </div>
+
+            <form onSubmit={handleLogin} className="space-y-6">
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest px-1">ID Tài khoản</label>
+                <div className="relative group">
+                  <div className="absolute inset-y-0 left-5 flex items-center pointer-events-none text-zinc-500 group-focus-within:text-emerald-500 transition-colors">
+                    <User className="w-5 h-5" />
+                  </div>
+                  <input 
+                    type="text"
+                    required
+                    value={loginId}
+                    onChange={(e) => setLoginId(e.target.value)}
+                    placeholder="Nhập ID của bạn"
+                    className="w-full bg-zinc-800/50 border-2 border-zinc-700/50 rounded-2xl py-4 pl-14 pr-5 text-white font-bold focus:border-emerald-500 outline-none transition-all placeholder:text-zinc-600"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest px-1">Mật khẩu</label>
+                <div className="relative group">
+                  <div className="absolute inset-y-0 left-5 flex items-center pointer-events-none text-zinc-500 group-focus-within:text-emerald-500 transition-colors">
+                    <Lock className="w-5 h-5" />
+                  </div>
+                  <input 
+                    type="password"
+                    required
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full bg-zinc-800/50 border-2 border-zinc-700/50 rounded-2xl py-4 pl-14 pr-5 text-white font-bold focus:border-emerald-500 outline-none transition-all placeholder:text-zinc-600"
+                  />
+                </div>
+              </div>
+
+              {loginError && (
+                <motion.div 
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className="bg-red-500/10 border border-red-500/20 p-4 rounded-2xl flex items-center gap-3"
+                >
+                  <AlertCircle className="w-5 h-5 text-red-500 shrink-0" />
+                  <p className="text-xs font-bold text-red-400">{loginError}</p>
+                </motion.div>
+              )}
+
+              <button 
+                type="submit"
+                disabled={isLoggingIn}
+                className="w-full h-16 bg-emerald-500 hover:bg-emerald-600 disabled:bg-zinc-700 text-white rounded-2xl font-black uppercase tracking-widest transition-all shadow-xl shadow-emerald-500/20 flex items-center justify-center gap-3 active:scale-[0.98]"
+              >
+                {isLoggingIn ? (
+                  <Loader2 className="w-6 h-6 animate-spin" />
+                ) : (
+                  <>
+                    <LogIn className="w-5 h-5" />
+                    Đăng nhập ngay
+                  </>
+                )}
+              </button>
+            </form>
+
+            <div className="mt-10 pt-8 border-t border-white/5 text-center">
+              <p className="text-[10px] text-zinc-600 font-bold uppercase tracking-widest">Phiên bản v2.5 • Bảo mật bởi Google Cloud</p>
+            </div>
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-zinc-50 text-zinc-900 font-sans selection:bg-emerald-500/30 print:bg-white print:text-black">
@@ -847,6 +1137,13 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
             title="Kiểm tra cấu hình"
           >
             <Settings className="w-5 h-5" />
+          </button>
+          <button 
+            onClick={handleLogout}
+            className="p-2.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-all"
+            title="Đăng xuất"
+          >
+            <LogOut className="w-5 h-5" />
           </button>
           {searchQuery && (
             <button 
@@ -1067,36 +1364,19 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
               </div>
 
               {/* Retake Button */}
-              {!isProcessing && (
-                <motion.button
-                  initial={{ opacity: 0, scale: 0.8 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  onClick={resetCapture}
-                  className="absolute bottom-6 right-6 p-4 bg-white/20 backdrop-blur-xl border border-white/30 rounded-full text-white shadow-2xl hover:bg-white/30 transition-all active:scale-95 z-30"
+              <motion.button
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                onClick={resetCapture}
+                className="absolute bottom-6 right-6 p-4 bg-white/20 backdrop-blur-xl border border-white/30 rounded-full text-white shadow-2xl hover:bg-white/30 transition-all active:scale-95 z-30"
+              >
+                <motion.div
+                  animate={{ scale: [1, 1.1, 1] }}
+                  transition={{ repeat: Infinity, duration: 2 }}
                 >
-                  <motion.div
-                    animate={{ scale: [1, 1.1, 1] }}
-                    transition={{ repeat: Infinity, duration: 2 }}
-                  >
-                    <CameraIcon className="w-6 h-6" />
-                  </motion.div>
-                </motion.button>
-              )}
-
-              {isProcessing && (
-                <div className="absolute inset-0 bg-black/80 backdrop-blur-md flex flex-col items-center justify-center text-white gap-6">
-                  <div className="relative">
-                    <Loader2 className="w-16 h-16 animate-spin text-emerald-500" />
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <div className="w-8 h-8 bg-emerald-500/20 rounded-full animate-pulse" />
-                    </div>
-                  </div>
-                  <div className="text-center space-y-2">
-                    <p className="font-black text-2xl tracking-tight uppercase italic">Đang phân tích</p>
-                    <p className="text-sm opacity-50 font-medium">AI đang nhận diện biển số & phương tiện</p>
-                  </div>
-                </div>
-              )}
+                  <CameraIcon className="w-6 h-6" />
+                </motion.div>
+              </motion.button>
             </div>
           )}
         </section>
@@ -1204,6 +1484,19 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
                   />
                 </div>
 
+                <div className="space-y-3">
+                  <label className="text-[10px] font-black text-zinc-400 uppercase tracking-[0.15em] flex items-center gap-2 px-1">
+                    <Smartphone className="w-3 h-3 text-emerald-500" /> Mã khách hàng
+                  </label>
+                  <input 
+                    type="text"
+                    value={customerCodeInput}
+                    onChange={(e) => handleUpdateCustomerCode(e.target.value.toUpperCase())}
+                    placeholder="NHẬP MÃ KHÁCH HÀNG"
+                    className="w-full bg-zinc-50 border-2 border-zinc-100 rounded-2xl px-5 py-4 text-sm font-bold focus:ring-2 focus:ring-emerald-500 transition-all text-zinc-900 outline-none placeholder:text-zinc-300 uppercase"
+                  />
+                </div>
+
                 <div className="grid grid-cols-2 gap-6">
                   <div className="space-y-3">
                     <label className="text-[10px] font-black text-zinc-400 uppercase tracking-[0.15em] flex items-center gap-2 px-1">
@@ -1253,7 +1546,7 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
 
               <div className="flex flex-col items-center gap-4 p-6 bg-zinc-50 rounded-[2rem] border border-zinc-100 mb-4">
                 {currentResult && (
-                  <QRCodeSVG value={getQrData(currentResult)} size={140} level="H" />
+                  <QRCodeSVG value={getQrData(currentResult)} size={140} level="M" />
                 )}
                 <div 
                   onClick={() => setShowQrContent(!showQrContent)}
@@ -1275,6 +1568,27 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
                     </motion.div>
                   )}
                 </div>
+              </div>
+
+              {/* Delete Button - Red Glossy */}
+              <div className="pt-2">
+                <motion.button
+                  whileHover={{ scale: 1.02, brightness: 1.1 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={(e) => currentResult && handleDeleteRecord(currentResult.id, e as any)}
+                  disabled={isDeletingFromSheet}
+                  className="w-full relative overflow-hidden py-4 bg-gradient-to-b from-red-500 to-red-700 text-white rounded-[2rem] font-black uppercase tracking-[0.2em] text-xs flex items-center justify-center gap-3 shadow-[0_10px_20px_rgba(239,68,68,0.3)] border-t border-white/20 group"
+                >
+                  {/* Glossy Effect Overlay */}
+                  <div className="absolute top-0 left-0 right-0 h-1/2 bg-gradient-to-b from-white/20 to-transparent pointer-events-none" />
+                  
+                  {isDeletingFromSheet ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-5 h-5 group-hover:animate-bounce" />
+                  )}
+                  {isDeletingFromSheet ? "Đang xóa..." : "Xóa chuyến này"}
+                </motion.button>
               </div>
             </motion.div>
           )}
@@ -1300,21 +1614,9 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
                 {isSavingToSheet ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
                 ) : (
-                  <motion.div
-                    animate={{ 
-                      scale: [1, 1.2, 1],
-                      opacity: [1, 0.8, 1]
-                    }}
-                    transition={{ 
-                      duration: 2,
-                      repeat: Infinity,
-                      ease: "easeInOut"
-                    }}
-                  >
-                    <Eye className="w-3.5 h-3.5" />
-                  </motion.div>
+                  <Printer className="w-3.5 h-3.5" />
                 )}
-                {isSavingToSheet ? 'Đang lưu Sheet...' : 'Lưu và xem trước'}
+                {isSavingToSheet ? 'Đang lưu Sheet...' : 'Lưu và In Phiếu'}
               </motion.button>
               <motion.button 
                 whileHover={{ scale: 1.02 }}
@@ -1412,132 +1714,183 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
                 </div>
               </div>
               
-              <div className="flex gap-3">
-                {/* Search Bar */}
+              <div className="flex gap-2">
+                <div className="relative shrink-0">
+                  <select 
+                    value={searchType}
+                    onChange={(e) => {
+                      setSearchType(e.target.value as any);
+                      setCurrentPage(1);
+                    }}
+                    className="h-full bg-emerald-50 border-2 border-emerald-100 rounded-2xl px-5 py-4 text-sm font-bold focus:ring-2 focus:ring-emerald-500 transition-all appearance-none text-emerald-900 outline-none pr-10 min-w-[130px] shadow-sm"
+                  >
+                    <option value="all" className="bg-white">Tất cả</option>
+                    <option value="id" className="bg-white">Mã phiếu</option>
+                    <option value="idNumber" className="bg-white">Số hiệu PT</option>
+                    <option value="customerCode" className="bg-white">Mã KH</option>
+                  </select>
+                  <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-emerald-400">
+                    <ChevronDown className="w-4 h-4" />
+                  </div>
+                </div>
+
                 <div className="relative group flex-1">
                   <div className="absolute inset-y-0 left-5 flex items-center pointer-events-none">
-                    <Truck className="w-4 h-4 text-zinc-400 group-focus-within:text-emerald-500 transition-colors" />
+                    <Search className="w-4 h-4 text-emerald-400 group-focus-within:text-emerald-500 transition-colors" />
                   </div>
                   <input 
                     type="text"
-                    placeholder="Tìm biển số xe / số hiệu tàu..."
+                    placeholder={
+                      searchType === 'all' ? "Tìm kiếm..." :
+                      searchType === 'id' ? "Nhập mã phiếu..." :
+                      searchType === 'idNumber' ? "Nhập biển số / số hiệu..." :
+                      "Nhập mã khách hàng..."
+                    }
                     value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full bg-white border-2 border-zinc-100 rounded-2xl py-4 pl-12 pr-5 text-sm font-bold focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 transition-all outline-none shadow-sm placeholder:text-zinc-300"
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value);
+                      setCurrentPage(1);
+                    }}
+                    className="w-full bg-emerald-50 border-2 border-emerald-100 rounded-2xl py-4 pl-12 pr-12 text-sm font-bold focus:ring-2 focus:ring-emerald-500 transition-all text-emerald-900 outline-none shadow-sm placeholder:text-emerald-200"
                   />
                   {searchQuery && (
                     <button 
-                      onClick={() => setSearchQuery("")}
-                      className="absolute inset-y-0 right-5 flex items-center text-zinc-400 hover:text-zinc-600"
+                      onClick={() => {
+                        setSearchQuery("");
+                        setCurrentPage(1);
+                      }}
+                      className="absolute inset-y-0 right-4 flex items-center text-emerald-400 hover:text-emerald-600 transition-colors"
                     >
                       <X className="w-4 h-4" />
                     </button>
                   )}
                 </div>
 
-                {filteredHistory.length > 0 && (
-                  <button 
-                    onClick={async () => {
-                      if (confirm(`Bạn có muốn lưu tất cả ${filteredHistory.length} bản ghi vào Google Sheet không?`)) {
-                        for (const record of filteredHistory) {
-                          await saveToGoogleSheet(record);
-                        }
-                      }
-                    }}
-                    className="px-4 bg-blue-50 text-blue-600 rounded-2xl border-2 border-blue-100 hover:bg-blue-100 transition-all flex items-center gap-2 shadow-sm"
-                    title="Lưu tất cả vào Sheet"
-                  >
-                    <Cloud className="w-4 h-4" />
-                    <span className="text-[10px] font-black uppercase tracking-widest hidden sm:inline">Lưu tất cả</span>
-                  </button>
+                {filteredHistory.length > 1 && (
+                  <div className="flex items-center gap-2">
+                    {/* Cloud buttons removed */}
+                  </div>
                 )}
               </div>
             </div>
 
             <div className="grid gap-4">
-              {filteredHistory.length > 0 ? (
-                filteredHistory.map((record) => (
-                  <motion.div 
-                    key={record.id}
-                    layout
-                    onClick={() => {
-                      setCurrentResult(record);
-                      setVolumeInput(record.volume || "");
-                      setIdNumberInput(record.idNumber && record.idNumber !== '---' ? record.idNumber : "");
-                      setProductType(record.productType || "Cát");
-                      setShowQrContent(false);
-                      stopCamera();
-                    }}
-                    className="bg-white p-4 rounded-3xl border border-zinc-200 flex items-center gap-4 hover:border-emerald-500/30 hover:shadow-lg transition-all group cursor-pointer active:scale-[0.98] w-full max-w-full overflow-hidden"
-                  >
-                    <div className="relative w-16 h-16 shrink-0">
-                      <img src={record.imageUrl} className="w-full h-full rounded-2xl object-cover ring-1 ring-zinc-100" alt="Lịch sử" />
-                      <div className="absolute -bottom-1 -right-1 bg-emerald-500 p-1 rounded-lg border-2 border-white">
-                        {record.vehicleType === 'truck' ? <Truck className="w-2.5 h-2.5 text-white" /> : <Ship className="w-2.5 h-2.5 text-white" />}
-                      </div>
-                    </div>
-                    <div className="flex-1 min-w-0 space-y-0.5">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <h4 className="font-black text-base tracking-tight italic uppercase text-zinc-900 leading-tight">
-                            <RenderSanitized value={record?.idNumber} />
-                          </h4>
-                          <p className="text-[9px] font-bold text-zinc-400 uppercase tracking-tighter">#{record.id.slice(-8)}</p>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              saveToGoogleSheet(record);
-                            }}
-                            title="Lưu vào Google Sheet"
-                            className="p-1.5 text-blue-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                          >
-                            <Cloud className="w-3.5 h-3.5" />
-                          </button>
-                          <button 
-                            onClick={(e) => handleEditRecord(record, e)}
-                            className="p-1.5 text-zinc-400 hover:text-emerald-500 hover:bg-emerald-50 rounded-lg transition-colors"
-                          >
-                            <RefreshCw className="w-3.5 h-3.5" />
-                          </button>
-                          <button 
-                            onClick={(e) => handleDeleteRecord(record.id, e)}
-                            className="p-1.5 text-zinc-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
+              {paginatedHistory.length > 0 ? (
+                <>
+                  {paginatedHistory.map((record) => (
+                    <motion.div 
+                      key={record.id}
+                      layout
+                      onClick={() => {
+                        setCurrentResult(record);
+                        setVolumeInput(record.volume || "");
+                        setIdNumberInput(record.idNumber && record.idNumber !== '---' ? record.idNumber : "");
+                        setCustomerCodeInput(record.customerCode || "");
+                        setProductType(record.productType || "Cát");
+                        setShowQrContent(false);
+                        setIsNewRecord(false);
+                        setIsModified(false);
+                        stopCamera();
+                      }}
+                      className="bg-white p-4 rounded-3xl border border-zinc-200 flex items-center gap-4 hover:border-emerald-500/30 hover:shadow-lg transition-all group cursor-pointer active:scale-[0.98] w-full max-w-full overflow-hidden"
+                    >
+                      <div className="relative w-16 h-16 shrink-0">
+                        <img src={record.imageUrl} className="w-full h-full rounded-2xl object-cover ring-1 ring-zinc-100" alt="Lịch sử" />
+                        <div className="absolute -bottom-1 -right-1 bg-emerald-500 p-1 rounded-lg border-2 border-white">
+                          {record.vehicleType === 'truck' ? <Truck className="w-2.5 h-2.5 text-white" /> : <Ship className="w-2.5 h-2.5 text-white" />}
                         </div>
                       </div>
-                      <div className="marquee-container">
-                        <p className="text-xs text-zinc-500 font-medium animate-marquee-bounce inline-block">
-                          {record?.location?.address || "Vị trí không xác định"}
-                        </p>
-                      </div>
-                      <div className="flex gap-2 pt-1">
-                        <span className="text-[9px] text-zinc-400 font-bold">
-                          {(() => {
-                            try {
-                              return new Intl.DateTimeFormat('vi-VN', { timeStyle: 'short' }).format(new Date(record.timestamp));
-                            } catch (e) {
-                              return "---";
-                            }
-                          })()}
-                        </span>
-                        {record?.productType && (
-                          <span className="text-[9px] bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-full font-black uppercase tracking-tighter border border-emerald-100">
-                            {record.productType}
+                      <div className="flex-1 min-w-0 space-y-0.5">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <h4 className="font-black text-base tracking-tight italic uppercase text-zinc-900 leading-tight">
+                              <RenderSanitized value={record?.idNumber} />
+                            </h4>
+                            <p className="text-[9px] font-bold text-zinc-400 uppercase tracking-tighter">#{record.id.slice(-8)}</p>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <button 
+                              onClick={(e) => handleEditRecord(record, e)}
+                              className="p-1.5 text-zinc-400 hover:text-emerald-500 hover:bg-emerald-50 rounded-lg transition-colors"
+                            >
+                              <RefreshCw className="w-3.5 h-3.5" />
+                            </button>
+                            <button 
+                              onClick={(e) => handleDeleteRecord(record.id, e)}
+                              className="p-1.5 text-zinc-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                        <div className="marquee-container">
+                          <p className="text-xs text-zinc-500 font-medium animate-marquee-bounce inline-block">
+                            {record?.location?.address || "Vị trí không xác định"}
+                          </p>
+                        </div>
+                        <div className="flex gap-2 pt-1">
+                          <span className="text-[9px] text-zinc-400 font-bold">
+                            {(() => {
+                              try {
+                                return new Intl.DateTimeFormat('vi-VN', { timeStyle: 'short' }).format(new Date(record.timestamp));
+                              } catch (e) {
+                                return "---";
+                              }
+                            })()}
                           </span>
-                        )}
-                        {record?.volume && (
-                          <span className="text-[9px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full font-black uppercase tracking-tighter border border-blue-100">
-                            {record.volume} m³
-                          </span>
-                        )}
+                          {record?.productType && (
+                            <span className="text-[9px] bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-full font-black uppercase tracking-tighter border border-emerald-100">
+                              {record.productType}
+                            </span>
+                          )}
+                          {record?.volume && (
+                            <span className="text-[9px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full font-black uppercase tracking-tighter border border-blue-100">
+                              {record.volume} m³
+                            </span>
+                          )}
+                          {record?.customerCode && (
+                            <span className="text-[9px] bg-zinc-100 text-zinc-600 px-2 py-0.5 rounded-full font-black uppercase tracking-tighter border border-zinc-200">
+                              {record.customerCode}
+                            </span>
+                          )}
+                        </div>
                       </div>
+                    </motion.div>
+                  ))}
+
+                  {/* Pagination Controls */}
+                  {totalPages > 1 && (
+                    <div className="flex items-center justify-center gap-4 mt-6 pb-4">
+                      <button
+                        onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                        disabled={currentPage === 1}
+                        className={`p-3 rounded-2xl border-2 transition-all ${currentPage === 1 ? 'bg-zinc-50 border-zinc-100 text-zinc-300' : 'bg-white border-zinc-100 text-zinc-600 hover:border-emerald-500/30 hover:text-emerald-600 active:scale-95'}`}
+                      >
+                        <ChevronLeft className="w-5 h-5" />
+                      </button>
+                      
+                      <div className="flex items-center gap-2">
+                        {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
+                          <button
+                            key={page}
+                            onClick={() => setCurrentPage(page)}
+                            className={`w-10 h-10 rounded-xl text-[10px] font-black transition-all ${currentPage === page ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'bg-white border border-zinc-100 text-zinc-400 hover:border-zinc-200'}`}
+                          >
+                            {page}
+                          </button>
+                        ))}
+                      </div>
+
+                      <button
+                        onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                        disabled={currentPage === totalPages}
+                        className={`p-3 rounded-2xl border-2 transition-all ${currentPage === totalPages ? 'bg-zinc-50 border-zinc-100 text-zinc-300' : 'bg-white border-zinc-100 text-zinc-600 hover:border-emerald-500/30 hover:text-emerald-600 active:scale-95'}`}
+                      >
+                        <ChevronRight className="w-5 h-5" />
+                      </button>
                     </div>
-                  </motion.div>
-                ))
+                  )}
+                </>
               ) : (
                 <div className="py-12 text-center space-y-3 bg-white rounded-[2.5rem] border-2 border-dashed border-zinc-100">
                   <div className="bg-zinc-50 w-12 h-12 rounded-full flex items-center justify-center mx-auto">
@@ -1706,6 +2059,12 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
                                 </p>
                               </div>
                               <div className="flex items-baseline gap-1">
+                                <p className="text-[7px] font-black text-zinc-400 uppercase tracking-widest">Mã KH:</p>
+                                <p className="text-[10px] font-black text-zinc-900 truncate">
+                                  <RenderSanitized value={currentResult?.customerCode} />
+                                </p>
+                              </div>
+                              <div className="flex items-baseline gap-1">
                                 <p className="text-[7px] font-black text-zinc-400 uppercase tracking-widest">Loại hàng:</p>
                                 <p className="text-xs font-black text-zinc-900 truncate">
                                   <RenderSanitized value={currentResult?.productType} />
@@ -1723,7 +2082,7 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
                             {/* QR Code for 80mm mode */}
                             <div className="flex flex-col items-center gap-1 shrink-0">
                               <div className="p-1 bg-white border-2 border-zinc-900 rounded-lg">
-                                <QRCodeSVG value={getQrData(currentResult!)} size={82} level="H" />
+                                <QRCodeSVG value={getQrData(currentResult!)} size={82} level="M" />
                               </div>
                               <p className="text-[6px] font-black text-zinc-400 uppercase tracking-[0.1em] text-center leading-tight">Mã xác thực</p>
                             </div>
@@ -1738,6 +2097,17 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
                                 <p className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">Biển số / Số hiệu</p>
                                 <p className="text-2xl font-black italic tracking-tighter text-zinc-900">
                                   <RenderSanitized value={currentResult?.idNumber} />
+                                </p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <div className="p-2 bg-zinc-50 rounded-xl border border-zinc-100">
+                                <Smartphone className="w-5 h-5 text-zinc-900" />
+                              </div>
+                              <div>
+                                <p className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">Mã khách hàng</p>
+                                <p className="text-xl font-black italic tracking-tighter text-zinc-900">
+                                  <RenderSanitized value={currentResult?.customerCode} />
                                 </p>
                               </div>
                             </div>
@@ -1803,7 +2173,7 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
                           {!isThermalMode && (
                             <div className="pt-4 flex flex-col items-center gap-2">
                               <div className="p-2 bg-white border-2 border-zinc-900 rounded-2xl shadow-sm">
-                                <QRCodeSVG value={getQrData(currentResult!)} size={100} level="H" />
+                                <QRCodeSVG value={getQrData(currentResult!)} size={100} level="M" />
                               </div>
                               <div className="text-center">
                                 <p className="text-[8px] font-black text-zinc-900 uppercase tracking-[0.2em]">Mã xác thực điện tử</p>
@@ -1874,15 +2244,13 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
                   </button>
 
                   <button 
-                    onClick={handleDownloadPDF}
-                    className="h-10 sm:h-12 px-4 sm:px-6 bg-zinc-900 text-white rounded-xl sm:rounded-2xl text-[9px] sm:text-[10px] font-black uppercase tracking-widest hover:bg-black transition-all shadow-xl shadow-black/20 flex items-center gap-2 relative overflow-hidden"
-                  >
-                    <FileDown className="w-3.5 h-3.5 sm:w-4 h-4" />
-                    <span className="hidden xs:inline">Tải PDF</span>
-                    <span className="xs:hidden">PDF</span>
-                  </button>
-                  <button 
-                    onClick={() => setShowPrintView(false)}
+                    onClick={() => {
+                      setShowPrintView(false);
+                      setCurrentResult(null);
+                      setCapturedImage(null);
+                      setIsCameraActive(true);
+                      setIsProcessing(false);
+                    }}
                     className="h-10 w-10 sm:h-12 sm:w-12 flex items-center justify-center bg-zinc-100 hover:bg-zinc-200 rounded-xl sm:rounded-2xl text-zinc-500 transition-all border border-zinc-200"
                   >
                     <X className="w-4 h-4 sm:w-5 sm:h-5" />
@@ -1890,6 +2258,59 @@ Vị trí: ${record?.location?.address || 'Chưa xác định'}`;
                 </div>
               </div>
             </div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showDeleteConfirm && (
+          <div className="fixed inset-0 z-[300] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowDeleteConfirm(false)}
+              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-sm bg-white rounded-[2.5rem] overflow-hidden shadow-2xl border border-zinc-100"
+            >
+              <div className="p-8 text-center">
+                <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-6">
+                  <AlertCircle className="w-10 h-10 text-red-500" />
+                </div>
+                <h3 className="text-xl font-black text-zinc-900 mb-2 uppercase tracking-tight">Xác nhận xóa?</h3>
+                <p className="text-zinc-500 text-sm leading-relaxed mb-8">
+                  Bạn có chắc chắn muốn xóa chuyến đi này? <br/>
+                  Dữ liệu sẽ bị gỡ bỏ vĩnh viễn khỏi hệ thống và Google Sheet.
+                </p>
+                
+                <div className="flex flex-col gap-3">
+                  <button
+                    onClick={confirmDelete}
+                    disabled={isDeletingFromSheet}
+                    className="w-full py-4 bg-red-600 hover:bg-red-700 text-white rounded-2xl font-bold transition-all shadow-lg shadow-red-200 flex items-center justify-center gap-2"
+                  >
+                    {isDeletingFromSheet ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <Trash2 className="w-5 h-5" />
+                    )}
+                    {isDeletingFromSheet ? "Đang xóa..." : "Xóa vĩnh viễn"}
+                  </button>
+                  <button
+                    onClick={() => setShowDeleteConfirm(false)}
+                    disabled={isDeletingFromSheet}
+                    className="w-full py-4 bg-zinc-100 hover:bg-zinc-200 text-zinc-600 rounded-2xl font-bold transition-all"
+                  >
+                    Không xóa
+                  </button>
+                </div>
+              </div>
+            </motion.div>
           </div>
         )}
       </AnimatePresence>

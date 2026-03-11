@@ -485,7 +485,7 @@ export default function App() {
       id: generateTicketId(),
       imageUrl: base64Image,
       vehicleType: 'truck',
-      idNumber: '---',
+      idNumber: '',
       customerCode: '',
       timestamp: new Date().toISOString(),
       location: {
@@ -499,6 +499,8 @@ export default function App() {
     };
 
     setCurrentResult(initialRecord);
+    setIdNumberInput("");
+    setCustomerCodeInput("");
     setIsNewRecord(true);
     setIsModified(false);
     setHistory(prev => [initialRecord, ...prev]);
@@ -943,11 +945,10 @@ export default function App() {
       console.error("Date format error", e);
     }
     
-    return `THÔNG TIN PHIẾU XUẤT KHO
+    return `Mã KH: ${sanitizeValue(record.customerCode)}
+Số hiệu: ${sanitizeValue(record.idNumber)}
 Sản phẩm: ${sanitizeValue(record.productType)}
-Phương tiện: ${sanitizeValue(record.idNumber)}
-Mã KH: ${sanitizeValue(record.customerCode)}
-Số m³: ${record.volume || '0'} m³
+Khối lượng: ${record.volume || '0'} m³
 Thời gian: ${timeStr}`;
   };
 
@@ -1584,7 +1585,17 @@ Thời gian: ${timeStr}`;
 
               <div className="flex flex-col items-center gap-4 p-6 bg-zinc-50 rounded-[2rem] border border-zinc-100 mb-4">
                 {currentResult && (
-                  <QRCodeSVG value={getQrData(currentResult)} size={140} level="M" />
+                  <QRCodeSVG 
+                    value={getQrData(currentResult)} 
+                    size={140} 
+                    level="H" 
+                    imageSettings={{
+                      src: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAiIGhlaWdodD0iMTAwIiB2aWV3Qm94PSIwIDAgMTAwIDEwMCI+PHJlY3Qgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxMDAiIHJ4PSIyMCIgZmlsbD0iIzEwYjk4MSIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBkb21pbmFudC1iYXNlbGluZT0ibWlkZGxlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iQXJpYWwsIHNhbnMtc2VyaWYiIGZvbnQtd2VpZ2h0PSJib2xkIiBmb250LXNpemU9IjQwIiBmaWxsPSJ3aGl0ZSI+UFROPC90ZXh0Pjwvc3ZnPg==",
+                      height: 30,
+                      width: 30,
+                      excavate: true,
+                    }}
+                  />
                 )}
                 <div 
                   onClick={() => setShowQrContent(!showQrContent)}
@@ -2121,24 +2132,23 @@ Thời gian: ${timeStr}`;
                             {/* QR Code for 80mm mode */}
                             <div className="flex flex-col items-center gap-1 shrink-0">
                               <div className="p-1 bg-white border-2 border-zinc-900 rounded-lg">
-                                <QRCodeSVG value={getQrData(currentResult!)} size={82} level="M" />
+                                <QRCodeSVG 
+                                  value={getQrData(currentResult!)} 
+                                  size={82} 
+                                  level="H" 
+                                  imageSettings={{
+                                    src: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAiIGhlaWdodD0iMTAwIiB2aWV3Qm94PSIwIDAgMTAwIDEwMCI+PHJlY3Qgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxMDAiIHJ4PSIyMCIgZmlsbD0iIzEwYjk4MSIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBkb21pbmFudC1iYXNlbGluZT0ibWlkZGxlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iQXJpYWwsIHNhbnMtc2VyaWYiIGZvbnQtd2VpZ2h0PSJib2xkIiBmb250LXNpemU9IjQwIiBmaWxsPSJ3aGl0ZSI+UFROPC90ZXh0Pjwvc3ZnPg==",
+                                    height: 18,
+                                    width: 18,
+                                    excavate: true,
+                                  }}
+                                />
                               </div>
                               <p className="text-[6px] font-black text-zinc-400 uppercase tracking-[0.1em] text-center leading-tight">Mã xác thực</p>
                             </div>
                           </div>
                         ) : (
-                          <div className="flex items-start justify-between gap-4">
-                            <div className="flex items-center gap-3">
-                              <div className="p-2 bg-zinc-50 rounded-xl border border-zinc-100">
-                                {currentResult?.vehicleType === 'truck' ? <Truck className="w-5 h-5 text-zinc-900" /> : <Ship className="w-5 h-5 text-zinc-900" />}
-                              </div>
-                              <div>
-                                <p className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">Biển số / Số hiệu</p>
-                                <p className="text-2xl font-black italic tracking-tighter text-zinc-900">
-                                  <RenderSanitized value={currentResult?.idNumber} />
-                                </p>
-                              </div>
-                            </div>
+                          <div className="flex flex-col gap-4">
                             <div className="flex items-center gap-3">
                               <div className="p-2 bg-zinc-50 rounded-xl border border-zinc-100">
                                 <Smartphone className="w-5 h-5 text-zinc-900" />
@@ -2147,6 +2157,17 @@ Thời gian: ${timeStr}`;
                                 <p className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">Mã khách hàng</p>
                                 <p className="text-xl font-black italic tracking-tighter text-zinc-900">
                                   <RenderSanitized value={currentResult?.customerCode} />
+                                </p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <div className="p-2 bg-zinc-50 rounded-xl border border-zinc-100">
+                                {currentResult?.vehicleType === 'truck' ? <Truck className="w-5 h-5 text-zinc-900" /> : <Ship className="w-5 h-5 text-zinc-900" />}
+                              </div>
+                              <div>
+                                <p className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">Biển số / Số hiệu</p>
+                                <p className="text-2xl font-black italic tracking-tighter text-zinc-900">
+                                  <RenderSanitized value={currentResult?.idNumber} />
                                 </p>
                               </div>
                             </div>
@@ -2212,7 +2233,17 @@ Thời gian: ${timeStr}`;
                           {!isThermalMode && (
                             <div className="pt-4 flex flex-col items-center gap-2">
                               <div className="p-2 bg-white border-2 border-zinc-900 rounded-2xl shadow-sm">
-                                <QRCodeSVG value={getQrData(currentResult!)} size={100} level="M" />
+                                <QRCodeSVG 
+                                  value={getQrData(currentResult!)} 
+                                  size={100} 
+                                  level="H" 
+                                  imageSettings={{
+                                    src: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAiIGhlaWdodD0iMTAwIiB2aWV3Qm94PSIwIDAgMTAwIDEwMCI+PHJlY3Qgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxMDAiIHJ4PSIyMCIgZmlsbD0iIzEwYjk4MSIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBkb21pbmFudC1iYXNlbGluZT0ibWlkZGxlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iQXJpYWwsIHNhbnMtc2VyaWYiIGZvbnQtd2VpZ2h0PSJib2xkIiBmb250LXNpemU9IjQwIiBmaWxsPSJ3aGl0ZSI+UFROPC90ZXh0Pjwvc3ZnPg==",
+                                    height: 22,
+                                    width: 22,
+                                    excavate: true,
+                                  }}
+                                />
                               </div>
                               <div className="text-center">
                                 <p className="text-[8px] font-black text-zinc-900 uppercase tracking-[0.2em]">Mã xác thực điện tử</p>

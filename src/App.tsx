@@ -1670,10 +1670,7 @@ Thời gian: ${timeStr}`;
           )}
         </AnimatePresence>
 
-          </>
-      )}
-
-      {/* Debug Info Overlay */}
+  {/* Debug Info Overlay */}
         <AnimatePresence>
           {debugInfo && (
             <motion.div 
@@ -1944,7 +1941,8 @@ Thời gian: ${timeStr}`;
           </section>
         )}
       </main>
-
+    </>
+  )}
       {/* Edit Modal */}
       <AnimatePresence>
         {isEditing && editForm && (

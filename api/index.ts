@@ -1,18 +1,16 @@
 import express from "express";
-import { createServer as createViteServer } from "vite";
 import { google } from "googleapis";
 import dotenv from "dotenv";
 
 dotenv.config();
 
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
+const app = express();
+const PORT = 3000;
 
-  app.use(express.json({ limit: '50mb' }));
+app.use(express.json({ limit: '50mb' }));
 
-  // Google Sheets API Setup
-  const getSheetsClient = async () => {
+// Google Sheets API Setup
+const getSheetsClient = async () => {
     let credentials;
     try {
       let key = (process.env.GOOGLE_SERVICE_ACCOUNT_KEY || '').trim();
@@ -499,6 +497,7 @@ async function startServer() {
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -511,9 +510,10 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
-}
+  if (process.env.NODE_ENV !== "production") {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
+  }
 
-startServer();
+export default app;

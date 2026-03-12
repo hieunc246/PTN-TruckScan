@@ -14,6 +14,7 @@ interface CaptureRecord {
   vehicleType: 'truck' | 'ship' | 'unknown';
   idNumber: string;
   customerCode?: string;
+  customerName?: string;
   timestamp: string;
   location: {
     lat: number;
@@ -23,6 +24,7 @@ interface CaptureRecord {
   confidence: number;
   volume?: string;
   productType?: 'Cát' | 'Đất';
+  driveImageUrl?: string;
 }
 
 interface GeminiResult {
@@ -59,6 +61,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [idNumberInput, setIdNumberInput] = useState("");
   const [customerCodeInput, setCustomerCodeInput] = useState("");
+  const [customerNameInput, setCustomerNameInput] = useState("");
   const [volumeInput, setVolumeInput] = useState("");
   const [productType, setProductType] = useState<'Cát' | 'Đất'>('Cát');
   const [showPrintView, setShowPrintView] = useState(false);
@@ -487,6 +490,7 @@ export default function App() {
       vehicleType: 'truck',
       idNumber: '',
       customerCode: '',
+      customerName: '',
       timestamp: new Date().toISOString(),
       location: {
         lat: location?.lat || 0,
@@ -501,6 +505,7 @@ export default function App() {
     setCurrentResult(initialRecord);
     setIdNumberInput("");
     setCustomerCodeInput("");
+    setCustomerNameInput("");
     setIsNewRecord(true);
     setIsModified(false);
     setHistory(prev => [initialRecord, ...prev]);
@@ -653,6 +658,15 @@ export default function App() {
     }
   };
 
+  const handleUpdateCustomerName = (val: string) => {
+    setCustomerNameInput(val);
+    setIsModified(true);
+    if (currentResult) {
+      setCurrentResult({ ...currentResult, customerName: val });
+      setHistory(prev => prev.map(r => r.id === currentResult.id ? { ...r, customerName: val } : r));
+    }
+  };
+
   const handleUpdateVolume = (val: string) => {
     setVolumeInput(val);
     setIsModified(true);
@@ -683,6 +697,48 @@ export default function App() {
 
     return () => clearTimeout(timer);
   }, [idNumberInput]);
+
+  // Fetch customer name by customer code
+  useEffect(() => {
+    if (!customerCodeInput || customerCodeInput.length < 2) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/get-customer-name/${encodeURIComponent(customerCodeInput)}`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data.customerName) {
+            handleUpdateCustomerName(data.customerName);
+          }
+        }
+      } catch (err) {
+        console.error("Error fetching customer name:", err);
+      }
+    }, 800); // Debounce 800ms
+
+    return () => clearTimeout(timer);
+  }, [customerCodeInput]);
+
+  // Fetch customer name for edit form
+  useEffect(() => {
+    if (!editForm?.customerCode || editForm.customerCode.length < 2) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/get-customer-name/${encodeURIComponent(editForm.customerCode)}`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data.customerName && data.customerName !== editForm.customerName) {
+            setEditForm(prev => prev ? { ...prev, customerName: data.customerName } : null);
+          }
+        }
+      } catch (err) {
+        console.error("Error fetching customer name for edit:", err);
+      }
+    }, 800);
+
+    return () => clearTimeout(timer);
+  }, [editForm?.customerCode]);
 
   const handleUpdateProductType = (val: 'Cát' | 'Đất') => {
     setProductType(val);
@@ -720,6 +776,7 @@ export default function App() {
     setVolumeInput("");
     setIdNumberInput("");
     setCustomerCodeInput("");
+    setCustomerNameInput("");
     setShowQrContent(false);
     setIsNewRecord(false);
     setIsModified(false);
@@ -945,7 +1002,7 @@ export default function App() {
       console.error("Date format error", e);
     }
     
-    return `Mã KH: ${sanitizeValue(record.customerCode)}
+    return `Tên KH: ${sanitizeValue(record.customerName)}
 Số hiệu: ${sanitizeValue(record.idNumber)}
 Sản phẩm: ${sanitizeValue(record.productType)}
 Khối lượng: ${record.volume || '0'} m³
@@ -1834,6 +1891,7 @@ Thời gian: ${timeStr}`;
                         setVolumeInput(record.volume || "");
                         setIdNumberInput(record.idNumber && record.idNumber !== '---' ? record.idNumber : "");
                         setCustomerCodeInput(record.customerCode || "");
+                        setCustomerNameInput(record.customerName || "");
                         setProductType(record.productType || "Cát");
                         setShowQrContent(false);
                         setIsNewRecord(false);
@@ -2008,6 +2066,23 @@ Thời gian: ${timeStr}`;
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
+                    <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest px-1">Mã KH</label>
+                    <input 
+                      type="text"
+                      value={editForm.customerCode || ''}
+                      onChange={(e) => setEditForm({ ...editForm, customerCode: e.target.value })}
+                      className="w-full bg-zinc-50 border-2 border-zinc-100 rounded-2xl px-5 py-4 text-sm font-bold focus:border-emerald-500 outline-none transition-all"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest px-1">Tên KH</label>
+                    <div className="w-full bg-zinc-50 border-2 border-zinc-100 rounded-2xl px-5 py-4 text-sm font-bold text-zinc-500">
+                      {editForm.customerName || '---'}
+                    </div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
                     <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest px-1">Loại hàng</label>
                     <select 
                       value={editForm.productType}
@@ -2153,9 +2228,9 @@ Thời gian: ${timeStr}`;
                                 <Smartphone className="w-5 h-5 text-zinc-900" />
                               </div>
                               <div>
-                                <p className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">Mã khách hàng</p>
+                                <p className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">Tên khách hàng</p>
                                 <p className="text-xl font-black italic tracking-tighter text-zinc-900">
-                                  <RenderSanitized value={currentResult?.customerCode} />
+                                  <RenderSanitized value={currentResult?.customerName} />
                                 </p>
                               </div>
                             </div>

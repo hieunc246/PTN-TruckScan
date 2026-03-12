@@ -1,6 +1,7 @@
 import express from "express";
 import { google } from "googleapis";
 import dotenv from "dotenv";
+import { Readable } from "stream";
 
 dotenv.config();
 
@@ -68,9 +69,127 @@ const getSheetsClient = async () => {
 
     const auth = new google.auth.GoogleAuth({
       credentials,
-      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+      scopes: [
+        'https://www.googleapis.com/auth/spreadsheets',
+        'https://www.googleapis.com/auth/drive.file',
+        'https://www.googleapis.com/auth/drive'
+      ],
     });
     return google.sheets({ version: 'v4', auth });
+  };
+
+  const getDriveClient = async () => {
+    let credentials;
+    try {
+      let key = (process.env.GOOGLE_SERVICE_ACCOUNT_KEY || '').trim();
+      if (key.startsWith('"') && key.endsWith('"')) key = key.substring(1, key.length - 1);
+      const tryParse = (str: string) => {
+        try { return JSON.parse(str); } catch (e) {
+          const firstBrace = str.indexOf('{');
+          for (let i = str.indexOf('}', firstBrace); i !== -1; i = str.indexOf('}', i + 1)) {
+            try { return JSON.parse(str.substring(firstBrace, i + 1)); } catch (inner) {}
+          }
+          throw e;
+        }
+      };
+      credentials = tryParse(key);
+      if (credentials && credentials.private_key) credentials.private_key = credentials.private_key.replace(/\\n/g, '\n');
+    } catch (e: any) { throw new Error(`Lỗi cấu hình Google Service Account: ${e.message}`); }
+    const auth = new google.auth.GoogleAuth({
+      credentials,
+      scopes: ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive'],
+    });
+    return google.drive({ version: 'v3', auth });
+  };
+
+  const PARENT_DRIVE_FOLDER_ID = "1BIWTK5I_UlgsYpvwo04ScmPqP6fIySHw";
+
+  const saveImageToDrive = async (base64Image: string, id: string) => {
+    try {
+      const drive = await getDriveClient();
+      const dateObj = new Date();
+      const folderName = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
+      
+      // 1. Find or create daily folder
+      let folderId = "";
+      const folderSearch = await drive.files.list({
+        q: `name = '${folderName}' and mimeType = 'application/vnd.google-apps.folder' and '${PARENT_DRIVE_FOLDER_ID}' in parents and trashed = false`,
+        fields: 'files(id)',
+      });
+
+      if (folderSearch.data.files && folderSearch.data.files.length > 0) {
+        folderId = folderSearch.data.files[0].id!;
+      } else {
+        const folderMetadata = {
+          name: folderName,
+          mimeType: 'application/vnd.google-apps.folder',
+          parents: [PARENT_DRIVE_FOLDER_ID],
+        };
+        const folder = await drive.files.create({
+          requestBody: folderMetadata,
+          fields: 'id',
+        });
+        folderId = folder.data.id!;
+      }
+
+      // 2. Upload image
+      const base64Data = base64Image.replace(/^data:image\/\w+;base64,/, "");
+      const buffer = Buffer.from(base64Data, 'base64');
+      
+      const fileMetadata = {
+        name: `${id}.jpg`,
+        parents: [folderId],
+      };
+      const media = {
+        mimeType: 'image/jpeg',
+        body: Readable.from(buffer),
+      };
+
+      const file = await drive.files.create({
+        requestBody: fileMetadata,
+        media: media,
+        fields: 'id, webViewLink',
+      });
+
+      // 3. Make file public (optional, but requested "link ảnh")
+      await drive.permissions.create({
+        fileId: file.data.id!,
+        requestBody: {
+          role: 'reader',
+          type: 'anyone',
+        },
+      });
+
+      return file.data.webViewLink;
+    } catch (error) {
+      console.error("Error saving image to Drive:", error);
+      return null;
+    }
+  };
+
+  const cleanupOldDriveFolders = async () => {
+    try {
+      const drive = await getDriveClient();
+      const response = await drive.files.list({
+        q: `'${PARENT_DRIVE_FOLDER_ID}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+        fields: 'files(id, name, createdTime)',
+      });
+
+      const folders = response.data.files || [];
+      const now = new Date();
+      const threeDaysAgo = new Date(now.setDate(now.getDate() - 3));
+
+      for (const folder of folders) {
+        // Folder name is YYYY-MM-DD
+        const folderDate = new Date(folder.name!);
+        if (!isNaN(folderDate.getTime()) && folderDate < threeDaysAgo) {
+          console.log(`Deleting old folder: ${folder.name} (${folder.id})`);
+          await drive.files.delete({ fileId: folder.id! });
+        }
+      }
+    } catch (error) {
+      console.error("Error cleaning up old Drive folders:", error);
+    }
   };
 
   // API Route to check configuration
@@ -115,6 +234,8 @@ const getSheetsClient = async () => {
         timestamp, 
         vehicleType, 
         idNumber, 
+        customerCode,
+        customerName,
         volume, 
         productType, 
         location,
@@ -129,9 +250,17 @@ const getSheetsClient = async () => {
       }
 
       const spreadsheetId = process.env.GOOGLE_SHEETS_ID || "1ayrzQ3JTxuZuhXaxtoQN6jHS1T78sCHPhO2PDScJhhI";
-      const range = "D-App!A:I"; 
+      const range = "D-App!A:L"; 
 
       console.log(`Attempting to save to Sheet ID: ${spreadsheetId}, Range: ${range}`);
+
+      // 0. Save image to Drive and cleanup
+      let driveImageUrl = null;
+      if (imageUrl && imageUrl.startsWith('data:image')) {
+        driveImageUrl = await saveImageToDrive(imageUrl, id);
+        // Fire and forget cleanup
+        cleanupOldDriveFolders().catch(err => console.error("Cleanup error:", err));
+      }
 
       const sheets = await getSheetsClient();
       
@@ -165,14 +294,17 @@ const getSheetsClient = async () => {
         idNumber,
         volume,
         productType,
+        customerCode || '',
+        customerName || '',
         location ? `${location.lat}, ${location.lng}` : 'N/A',
-        location?.address || 'N/A'
+        location?.address || 'N/A',
+        driveImageUrl || 'N/A'
       ]];
 
       let result;
       if (rowIndex !== -1) {
         // Update existing row (rowIndex is 0-based, but range is 1-based)
-        const updateRange = `D-App!A${rowIndex + 1}:I${rowIndex + 1}`;
+        const updateRange = `D-App!A${rowIndex + 1}:L${rowIndex + 1}`;
         const updateResponse = await sheets.spreadsheets.values.update({
           spreadsheetId,
           range: updateRange,
@@ -281,6 +413,48 @@ const getSheetsClient = async () => {
     }
   });
 
+  // API Route to get customer name by customer code
+  app.get("/api/get-customer-name/:customerCode", async (req, res) => {
+    try {
+      const { customerCode } = req.params;
+      if (!customerCode) {
+        return res.status(400).json({ error: "Missing customer code" });
+      }
+
+      if (!process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
+        return res.status(500).json({ 
+          error: "Hệ thống chưa được cấu hình Google Service Account Key."
+        });
+      }
+
+      const spreadsheetId = process.env.GOOGLE_SHEETS_ID || "1ayrzQ3JTxuZuhXaxtoQN6jHS1T78sCHPhO2PDScJhhI";
+      const sheets = await getSheetsClient();
+
+      // Fetch columns R (Customer Code) and S (Customer Name)
+      const response = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: "D-App!R:S",
+      });
+
+      const rows = response.data.values;
+      if (!rows || rows.length === 0) {
+        return res.json({ customerName: null });
+      }
+
+      // Search from bottom to top to get the most recent entry
+      for (let i = rows.length - 1; i >= 0; i--) {
+        if (rows[i][0] === customerCode && rows[i][1]) {
+          return res.json({ customerName: rows[i][1] });
+        }
+      }
+
+      res.json({ customerName: null });
+    } catch (error: any) {
+      console.error("Error fetching customer name:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // API Route to delete from Google Sheets
   app.post("/api/delete-from-sheet", async (req, res) => {
     try {
@@ -369,7 +543,7 @@ const getSheetsClient = async () => {
 
       const response = await sheets.spreadsheets.values.get({
         spreadsheetId,
-        range: "D-App!A:I",
+        range: "D-App!A:L",
       });
 
       const rows = response.data.values;
@@ -391,20 +565,23 @@ const getSheetsClient = async () => {
           parseInt(minutes)
         ).toISOString();
 
-        const [lat, lng] = (row[7] || '0, 0').split(',').map((s: string) => parseFloat(s.trim()));
+        const [lat, lng] = (row[9] || '0, 0').split(',').map((s: string) => parseFloat(s.trim()));
 
         return {
           id: row[0],
           timestamp,
           vehicleType: row[3] === 'Xe tải' ? 'truck' : 'ship',
           idNumber: row[4],
-          volume: row[5],
-          productType: row[6],
+          customerCode: row[5],
+          customerName: row[6],
+          volume: row[7],
+          productType: row[8],
           location: {
             lat,
             lng,
-            address: row[8]
-          }
+            address: row[10]
+          },
+          driveImageUrl: row[11]
         };
       });
 

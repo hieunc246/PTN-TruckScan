@@ -10,120 +10,117 @@ const PORT = 3000;
 
 app.use(express.json({ limit: '50mb' }));
 
-// Google Sheets API Setup
-const getSheetsClient = async () => {
-    let credentials;
-    try {
-      let key = (process.env.GOOGLE_SERVICE_ACCOUNT_KEY || '').trim();
-      
-      // Handle cases where the key might be wrapped in quotes
-      if (key.startsWith('"') && key.endsWith('"')) {
-        key = key.substring(1, key.length - 1);
-      } else if (key.startsWith("'") && key.endsWith("'")) {
-        key = key.substring(1, key.length - 1);
-      }
-
-      if (!key) {
-        throw new Error("GOOGLE_SERVICE_ACCOUNT_KEY is empty");
-      }
-
-      // Check if it looks like a URL instead of JSON
-      if (key.startsWith('http')) {
-        throw new Error("Bạn dường như đã dán một URL (đường dẫn) vào GOOGLE_SERVICE_ACCOUNT_KEY thay vì nội dung file JSON. Vui lòng mở file .json đã tải xuống từ Google Cloud, copy TOÀN BỘ nội dung (bắt đầu bằng { và kết thúc bằng }) và dán vào phần Secrets.");
-      }
-
-      // Robust parsing: try to find the first valid JSON object
-      const tryParse = (str: string) => {
-        try {
-          return JSON.parse(str);
-        } catch (e: any) {
-          const firstBrace = str.indexOf('{');
-          if (firstBrace === -1) {
-            throw new Error(`Nội dung không phải là JSON hợp lệ. Chuỗi bắt đầu bằng: "${str.substring(0, 20)}...". File JSON của Google Service Account phải bắt đầu bằng dấu ngoặc nhọn {`);
-          }
-          
-          // Search for the first valid JSON object by trying each closing brace
-          for (let i = str.indexOf('}', firstBrace); i !== -1; i = str.indexOf('}', i + 1)) {
-            try {
-              const candidate = str.substring(firstBrace, i + 1);
-              return JSON.parse(candidate);
-            } catch (inner) {
-              // Not this one, keep looking
-            }
-          }
-          throw e;
-        }
-      };
-
-      credentials = tryParse(key);
-
-      // Fix for OpenSSL DECODER routines::unsupported error
-      // Ensure private_key has real newlines instead of literal "\n" strings
-      if (credentials && credentials.private_key) {
-        credentials.private_key = credentials.private_key.replace(/\\n/g, '\n');
-      }
-    } catch (e: any) {
-      console.error("Failed to parse GOOGLE_SERVICE_ACCOUNT_KEY:", e);
-      throw new Error(`Lỗi cấu hình Google Service Account: ${e.message}`);
+// Google API Auth Setup
+const getGoogleAuth = () => {
+  let credentials;
+  try {
+    let key = (process.env.GOOGLE_SERVICE_ACCOUNT_KEY || '').trim();
+    
+    // Handle cases where the key might be wrapped in quotes
+    if (key.startsWith('"') && key.endsWith('"')) {
+      key = key.substring(1, key.length - 1);
+    } else if (key.startsWith("'") && key.endsWith("'")) {
+      key = key.substring(1, key.length - 1);
     }
 
-    const auth = new google.auth.GoogleAuth({
-      credentials,
-      scopes: [
-        'https://www.googleapis.com/auth/spreadsheets',
-        'https://www.googleapis.com/auth/drive.file',
-        'https://www.googleapis.com/auth/drive'
-      ],
-    });
-    return google.sheets({ version: 'v4', auth });
-  };
+    if (!key) {
+      throw new Error("GOOGLE_SERVICE_ACCOUNT_KEY is empty");
+    }
 
-  const getDriveClient = async () => {
-    let credentials;
-    try {
-      let key = (process.env.GOOGLE_SERVICE_ACCOUNT_KEY || '').trim();
-      if (key.startsWith('"') && key.endsWith('"')) key = key.substring(1, key.length - 1);
-      const tryParse = (str: string) => {
-        try { return JSON.parse(str); } catch (e) {
-          const firstBrace = str.indexOf('{');
-          for (let i = str.indexOf('}', firstBrace); i !== -1; i = str.indexOf('}', i + 1)) {
-            try { return JSON.parse(str.substring(firstBrace, i + 1)); } catch (inner) {}
-          }
-          throw e;
+    // Check if it looks like a URL instead of JSON
+    if (key.startsWith('http')) {
+      throw new Error("Bạn dường như đã dán một URL (đường dẫn) vào GOOGLE_SERVICE_ACCOUNT_KEY thay vì nội dung file JSON. Vui lòng mở file .json đã tải xuống từ Google Cloud, copy TOÀN BỘ nội dung (bắt đầu bằng { và kết thúc bằng }) và dán vào phần Secrets.");
+    }
+
+    // Robust parsing: try to find the first valid JSON object
+    const tryParse = (str: string) => {
+      try {
+        return JSON.parse(str);
+      } catch (e: any) {
+        const firstBrace = str.indexOf('{');
+        if (firstBrace === -1) {
+          throw new Error(`Nội dung không phải là JSON hợp lệ. Chuỗi bắt đầu bằng: "${str.substring(0, 20)}...". File JSON của Google Service Account phải bắt đầu bằng dấu ngoặc nhọn {`);
         }
-      };
-      credentials = tryParse(key);
-      if (credentials && credentials.private_key) credentials.private_key = credentials.private_key.replace(/\\n/g, '\n');
-    } catch (e: any) { throw new Error(`Lỗi cấu hình Google Service Account: ${e.message}`); }
-    const auth = new google.auth.GoogleAuth({
-      credentials,
-      scopes: ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive'],
-    });
-    return google.drive({ version: 'v3', auth });
-  };
+        
+        // Search for the first valid JSON object by trying each closing brace
+        for (let i = str.indexOf('}', firstBrace); i !== -1; i = str.indexOf('}', i + 1)) {
+          try {
+            const candidate = str.substring(firstBrace, i + 1);
+            return JSON.parse(candidate);
+          } catch (inner) {
+            // Not this one, keep looking
+          }
+        }
+        throw e;
+      }
+    };
 
-  const PARENT_DRIVE_FOLDER_ID = "1BIWTK5I_UlgsYpvwo04ScmPqP6fIySHw";
+    credentials = tryParse(key);
+
+    // Fix for OpenSSL DECODER routines::unsupported error
+    // Ensure private_key has real newlines instead of literal "\n" strings
+    if (credentials && credentials.private_key) {
+      credentials.private_key = credentials.private_key.replace(/\\n/g, '\n');
+    }
+  } catch (e: any) {
+    console.error("Failed to parse GOOGLE_SERVICE_ACCOUNT_KEY:", e);
+    throw new Error(`Lỗi cấu hình Google Service Account: ${e.message}`);
+  }
+
+  return new google.auth.GoogleAuth({
+    credentials,
+    scopes: [
+      'https://www.googleapis.com/auth/spreadsheets',
+      'https://www.googleapis.com/auth/drive.file',
+      'https://www.googleapis.com/auth/drive'
+    ],
+  });
+};
+
+const getSheetsClient = async () => {
+  const auth = getGoogleAuth();
+  return google.sheets({ version: 'v4', auth });
+};
+
+const getDriveClient = async () => {
+  const auth = getGoogleAuth();
+  return google.drive({ version: 'v3', auth });
+};
 
   const saveImageToDrive = async (base64Image: string, id: string) => {
     try {
       const drive = await getDriveClient();
+      const parentFolderId = process.env.GOOGLE_DRIVE_FOLDER_ID || "1BIWTK5I_UlgsYpvwo04ScmPqP6fIySHw";
+      
+      console.log(`[Drive] Saving image for ID: ${id} to folder: ${parentFolderId}`);
+
+      // 0. Verify parent folder access
+      try {
+        await drive.files.get({ fileId: parentFolderId, fields: 'id, name' });
+      } catch (err: any) {
+        console.error(`[Drive] Parent folder ${parentFolderId} is not accessible. Error: ${err.message}`);
+        return null;
+      }
+
       const dateObj = new Date();
       const folderName = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
       
       // 1. Find or create daily folder
       let folderId = "";
       const folderSearch = await drive.files.list({
-        q: `name = '${folderName}' and mimeType = 'application/vnd.google-apps.folder' and '${PARENT_DRIVE_FOLDER_ID}' in parents and trashed = false`,
+        q: `name = '${folderName}' and mimeType = 'application/vnd.google-apps.folder' and '${parentFolderId}' in parents and trashed = false`,
         fields: 'files(id)',
       });
 
       if (folderSearch.data.files && folderSearch.data.files.length > 0) {
         folderId = folderSearch.data.files[0].id!;
+        console.log(`[Drive] Found existing daily folder: ${folderName} (${folderId})`);
       } else {
+        console.log(`[Drive] Creating new daily folder: ${folderName}`);
         const folderMetadata = {
           name: folderName,
           mimeType: 'application/vnd.google-apps.folder',
-          parents: [PARENT_DRIVE_FOLDER_ID],
+          parents: [parentFolderId],
         };
         const folder = await drive.files.create({
           requestBody: folderMetadata,
@@ -145,24 +142,33 @@ const getSheetsClient = async () => {
         body: Readable.from(buffer),
       };
 
+      console.log(`[Drive] Uploading file: ${id}.jpg`);
       const file = await drive.files.create({
         requestBody: fileMetadata,
         media: media,
-        fields: 'id, webViewLink',
+        fields: 'id, webViewLink, webContentLink',
       });
 
-      // 3. Make file public (optional, but requested "link ảnh")
-      await drive.permissions.create({
-        fileId: file.data.id!,
-        requestBody: {
-          role: 'reader',
-          type: 'anyone',
-        },
-      });
+      console.log(`[Drive] File uploaded successfully. ID: ${file.data.id}`);
+
+      // 3. Make file public
+      try {
+        await drive.permissions.create({
+          fileId: file.data.id!,
+          requestBody: {
+            role: 'reader',
+            type: 'anyone',
+          },
+        });
+        console.log(`[Drive] File permissions set to public.`);
+      } catch (permErr: any) {
+        console.warn(`[Drive] Could not set public permissions: ${permErr.message}`);
+      }
 
       return file.data.webViewLink;
-    } catch (error) {
-      console.error("Error saving image to Drive:", error);
+    } catch (error: any) {
+      console.error("[Drive] Error saving image to Drive:", error.message);
+      if (error.stack) console.error(error.stack);
       return null;
     }
   };
@@ -170,14 +176,17 @@ const getSheetsClient = async () => {
   const cleanupOldDriveFolders = async () => {
     try {
       const drive = await getDriveClient();
+      const parentFolderId = process.env.GOOGLE_DRIVE_FOLDER_ID || "1BIWTK5I_UlgsYpvwo04ScmPqP6fIySHw";
+      
       const response = await drive.files.list({
-        q: `'${PARENT_DRIVE_FOLDER_ID}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+        q: `'${parentFolderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
         fields: 'files(id, name, createdTime)',
       });
 
       const folders = response.data.files || [];
       const now = new Date();
-      const threeDaysAgo = new Date(now.setDate(now.getDate() - 3));
+      const threeDaysAgo = new Date();
+      threeDaysAgo.setDate(now.getDate() - 3);
 
       for (const folder of folders) {
         // Folder name is YYYY-MM-DD
@@ -198,6 +207,7 @@ const getSheetsClient = async () => {
       geminiKey: !!process.env.GEMINI_API_KEY,
       serviceAccountKey: {
         present: !!process.env.GOOGLE_SERVICE_ACCOUNT_KEY,
+        email: null as string | null,
         validJson: false,
         isUrl: false,
         error: null as string | null
@@ -205,6 +215,12 @@ const getSheetsClient = async () => {
       sheetsId: {
         present: !!process.env.GOOGLE_SHEETS_ID,
         value: process.env.GOOGLE_SHEETS_ID || "Sử dụng mặc định"
+      },
+      driveFolderId: {
+        present: !!process.env.GOOGLE_DRIVE_FOLDER_ID,
+        value: process.env.GOOGLE_DRIVE_FOLDER_ID || "1BIWTK5I_UlgsYpvwo04ScmPqP6fIySHw",
+        accessible: false,
+        error: null as string | null
       }
     };
 
@@ -215,8 +231,24 @@ const getSheetsClient = async () => {
           results.serviceAccountKey.isUrl = true;
           results.serviceAccountKey.error = "Bạn đã dán một URL thay vì nội dung file JSON.";
         } else {
-          JSON.parse(key);
-          results.serviceAccountKey.validJson = true;
+          try {
+            const auth = getGoogleAuth();
+            const credentials = await auth.getCredentials();
+            results.serviceAccountKey.email = credentials.client_email || null;
+            results.serviceAccountKey.validJson = true;
+            
+            // Check Drive access
+            try {
+              const drive = await getDriveClient();
+              const folderId = results.driveFolderId.value;
+              await drive.files.get({ fileId: folderId, fields: 'id, name' });
+              results.driveFolderId.accessible = true;
+            } catch (driveErr: any) {
+              results.driveFolderId.error = driveErr.message;
+            }
+          } catch (authErr: any) {
+            results.serviceAccountKey.error = authErr.message;
+          }
         }
       } catch (e: any) {
         results.serviceAccountKey.error = e.message;
@@ -241,6 +273,8 @@ const getSheetsClient = async () => {
         location,
         imageUrl 
       } = req.body;
+
+      console.log(`[Sheet] Saving record ${id}. Image present: ${!!imageUrl}`);
 
       if (!process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
         return res.status(500).json({ 
